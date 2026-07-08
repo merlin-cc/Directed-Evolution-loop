@@ -68,8 +68,22 @@ def produce_capsids(x1, viability_scores, alpha, rho, T_viab, key):
 
 # ── Full protocol ────────────────────────────────────────────────────────────
 
+rho   = 1.2e-4
+alpha = 4000
+
+epsilon = 0.3
+T_sel   = 0.5    # selectivity temperature
+T_viab  = 1.0    # viability temperature (larger = more uniform production)
+M       = 5
+K_MM    = 1000.0
+N_pcr   = 100_000
+D       = 50_000
+N1      = D
+
 def protocol(n0, sequences, viability_weights, selectivity_weights,
-             epsilon, alpha, rho, T_sel, T_viab, M, K_MM, D, N_pcr, N1, key,
+             epsilon_viability = epsilon, epsilon_selectivity = epsilon, 
+             alpha = alpha, rho = rho, T_sel = T_sel, T_viab = T_viab, M = M, 
+             K_MM = K_MM, D = D, N_pcr = N_pcr, N1 = N1, key = key,
              use_full_ngs=True):
     """
     Full AAV selection protocol simulation.
