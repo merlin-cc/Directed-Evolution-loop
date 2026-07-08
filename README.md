@@ -3,4 +3,4 @@ The goal of this git is to modelize mathematically the directed evolution protoc
 
 The next tasks that has to be done are:
 - modelize the pair-interactions between acido-amines.
-- 
+- ML model to fit the scores for each sequence (first for the linear model)
