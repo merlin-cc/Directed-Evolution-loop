@@ -67,7 +67,7 @@ def produce_capsids(x1, viability_scores, alpha, rho, T_viab, key):
 
 
 # ── Full protocol ────────────────────────────────────────────────────────────
-
+key = jax.random.key(42)
 rho   = 1.2e-4
 alpha = 4000
 
