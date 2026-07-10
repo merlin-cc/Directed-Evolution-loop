@@ -205,3 +205,5 @@ class Sequence_NGS_pipeline(Sequence):
         result = self.sequence_reads()
         self.X = X_original  # restore so repeated calls are safe
         return result
+
+
