@@ -62,7 +62,10 @@ def produce_capsids(x1, viability_scores, alpha, rho, T_viab, key):
     -------
     (num_sequences,) int array — capsid counts P(s)
     """
-    mu = rho * x1.astype(jnp.float32) * alpha * jnp.exp(viability_scores / T_viab)
+    # Numerically stable: subtract max before exp to avoid float32 overflow
+    log_viab = viability_scores / T_viab
+    # log_viab = log_viab - jnp.max(log_viab)
+    mu = rho * x1.astype(jnp.float32) * alpha * jnp.exp(log_viab)
     return jax.random.poisson(key, mu)
 
 
@@ -129,9 +132,10 @@ def protocol(n0, sequences, viability_weights, selectivity_weights,
     capsids  = produce_capsids(x1, viability_scores, alpha, rho, T_viab, k_capsids).astype(jnp.float32)
     lambda1p = _ngs(capsids, k_ngs1).astype(jnp.float32)
 
-    # Selectivity
+    # Selectivity — numerically stable softmax (subtract max before exp)
     s_tilde     = selectivity_scores + epsilon * jax.random.normal(k_noise, shape=selectivity_scores.shape)
-    post_select = lambda1p * jnp.exp(s_tilde / T_sel)
+    log_weights = s_tilde / T_sel - jnp.max(s_tilde / T_sel)
+    post_select = lambda1p * jnp.exp(log_weights)
     n2_prime    = post_select / jnp.sum(post_select) * D
     n2          = jax.random.poisson(k_ngs2, n2_prime).astype(jnp.float32)
 
