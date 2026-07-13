@@ -44,7 +44,7 @@ def ngs_full(X, D, N_pcr, key, M, K_MM):
 
 # ── Capsid production ────────────────────────────────────────────────────────
 
-def produce_capsids(x1, viability_scores, alpha, rho, T_viab, key):
+def produce_capsids(x1, viability_scores, epsilon, alpha, rho, T_viab, key):
     """
     HEK transfection and capsid production modulated by viability score.
     P(s) ~ Poisson(rho * x1[s] * alpha * exp(s_viab[s] / T_viab))
@@ -62,12 +62,10 @@ def produce_capsids(x1, viability_scores, alpha, rho, T_viab, key):
     -------
     (num_sequences,) int array — capsid counts P(s)
     """
-    # Numerically stable: subtract max before exp to avoid float32 overflow
-    log_viab = viability_scores / T_viab
-    # log_viab = log_viab - jnp.max(log_viab)
-    mu = rho * x1.astype(jnp.float32) * alpha * jnp.exp(log_viab)
+    key, k_noise = jax.random.split(key, 2)
+    viability_scores_noisy = viability_scores + epsilon * jax.random.normal(k_noise, shape=viability_scores.shape)  # noqa
+    mu = rho * x1.astype(jnp.float32) * alpha * jnp.exp(viability_scores_noisy / T_viab)
     return jax.random.poisson(key, mu)
-
 
 # ── Full protocol ────────────────────────────────────────────────────────────
 key = jax.random.key(42)
@@ -129,11 +127,12 @@ def protocol(n0, sequences, viability_weights, selectivity_weights,
     # Production
     lambda0  = _ngs(n0, k_ngs0).astype(jnp.float32)
     x1       = sample_sequences(lambda0, N1, k_sample).astype(jnp.float32)
-    capsids  = produce_capsids(x1, viability_scores, alpha, rho, T_viab, k_capsids).astype(jnp.float32)
+    capsids  = produce_capsids(x1, viability_scores, epsilon_viability, alpha, rho, T_viab, k_capsids).astype(jnp.float32)
     lambda1p = _ngs(capsids, k_ngs1).astype(jnp.float32)
 
     # Selectivity — numerically stable softmax (subtract max before exp)
-    s_tilde     = selectivity_scores + epsilon * jax.random.normal(k_noise, shape=selectivity_scores.shape)
+    print(epsilon_selectivity)
+    s_tilde     = selectivity_scores + epsilon_selectivity * jax.random.normal(k_noise, shape=selectivity_scores.shape)
     log_weights = s_tilde / T_sel - jnp.max(s_tilde / T_sel)
     post_select = lambda1p * jnp.exp(log_weights)
     n2_prime    = post_select / jnp.sum(post_select) * D
