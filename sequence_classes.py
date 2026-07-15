@@ -131,7 +131,6 @@ def protocol(n0, sequences, viability_weights, selectivity_weights,
     lambda1p = _ngs(capsids, k_ngs1).astype(jnp.float32)
 
     # Selectivity — numerically stable softmax (subtract max before exp)
-    print(epsilon_selectivity)
     s_tilde     = selectivity_scores + epsilon_selectivity * jax.random.normal(k_noise, shape=selectivity_scores.shape)
     log_weights = s_tilde / T_sel - jnp.max(s_tilde / T_sel)
     post_select = lambda1p * jnp.exp(log_weights)
