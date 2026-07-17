@@ -140,6 +140,9 @@ def protocol(n0, sequences, viability_weights, selectivity_weights,
     return lambda0, capsids, lambda1p, n2
 
 
+
+
+
 class Sequence():
     def __init__(self, X, D, key) -> None:
         """
