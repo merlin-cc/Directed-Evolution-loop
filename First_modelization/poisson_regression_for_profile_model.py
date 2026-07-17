@@ -21,8 +21,8 @@ import jax.numpy as jnp
 import statsmodels.api as sm
 import matplotlib.pyplot as plt
 from sklearn.model_selection import KFold
-from sequence_classes import protocol, calculate_scores, T_sel, T_viab
-from analysis import pearson, precision_at_k
+from First_modelization.sequence_classes import protocol, calculate_scores, T_sel, T_viab
+from First_modelization.analysis import pearson, precision_at_k
 
 key = jax.random.key(42)
 key_seq, key_viab_w, key_sel_w, key_n0, key_run = jax.random.split(key, 5)

@@ -3,7 +3,7 @@ import jax
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 
-from sequence_classes import protocol, calculate_scores, T_sel, T_viab
+from First_modelization.sequence_classes import protocol, calculate_scores, T_sel, T_viab
 
 def pearson(a, b):
     """
