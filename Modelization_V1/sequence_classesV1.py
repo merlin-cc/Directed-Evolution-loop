@@ -255,7 +255,7 @@ class Protocol():
         pipeline.pool = self.lambda3.astype(jnp.float32)
         self.lambda4  = pipeline.pcr_amplification()
         return self.lambda4
-        
+      
     def loop_DE(self) -> list[list[jax.Array]]:
         """ 
         Runs one full directed-evolution round: sampling -> capsid production -> selectivity,
@@ -300,4 +300,5 @@ class Protocol():
             lambdas.append(self.loop_DE())
             self.lambda0 = self.lambda4
         return lambdas
+    
     
