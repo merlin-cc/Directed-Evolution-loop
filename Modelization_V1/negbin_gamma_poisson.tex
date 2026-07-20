@@ -1,0 +1,130 @@
+\documentclass[11pt]{article}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{mathtools}
+
+\title{Pourquoi la loi Binomiale Négative peut être simulée\\comme un mélange Gamma-Poisson}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+
+\section{Le problème}
+
+Dans le modèle de séquençage (\texttt{sequence\_reads}), on veut simuler le nombre de reads
+$X_s$ observés pour une séquence $s$, avec une moyenne $\mu_s$ imposée par la profondeur de
+séquençage $D$ et la proportion $q_s$ de cette séquence dans le pool :
+\[
+  \mu_s = D \cdot q_s .
+\]
+
+Un simple $\mathrm{Poisson}(\mu_s)$ suppose que $\mathrm{Var}(X_s) = \mathbb{E}[X_s] = \mu_s$.
+En pratique, le bruit de PCR et de séquençage produit une variance strictement supérieure à la
+moyenne (\emph{surdispersion}). La loi Binomiale Négative $\mathrm{NB}(r,p)$ permet de modéliser
+cette surdispersion via un paramètre de dispersion $\phi$ :
+\[
+  r = \frac{1}{\phi}, \qquad p_s = \frac{r}{r+\mu_s}.
+\]
+
+Le problème : \texttt{jax.random} ne propose pas de tirage Binomial Négatif natif. On ne dispose
+que de \texttt{jax.random.gamma} et \texttt{jax.random.poisson}.
+
+\section{L'identité Gamma-Poisson}
+
+\textbf{Proposition.} Soit $\Lambda \sim \mathrm{Gamma}(r, \theta)$ (forme $r$, échelle $\theta$),
+et soit $X \mid \Lambda \sim \mathrm{Poisson}(\Lambda)$. Alors, marginalement,
+\[
+  X \sim \mathrm{NB}\!\left(r,\; p = \frac{1}{1+\theta}\right).
+\]
+
+\textbf{Démonstration.} La densité de $\Lambda$ est
+\[
+  f_\Lambda(\lambda) = \frac{\lambda^{r-1} e^{-\lambda/\theta}}{\Gamma(r)\,\theta^r}, \qquad \lambda > 0.
+\]
+La loi marginale de $X$ s'obtient en intégrant sur $\Lambda$ :
+\[
+  \mathbb{P}(X=k) = \int_0^\infty \mathbb{P}(X=k \mid \Lambda=\lambda)\, f_\Lambda(\lambda)\, d\lambda
+  = \int_0^\infty \frac{e^{-\lambda}\lambda^k}{k!} \cdot \frac{\lambda^{r-1} e^{-\lambda/\theta}}{\Gamma(r)\,\theta^r}\, d\lambda .
+\]
+On regroupe les termes en $\lambda$ :
+\[
+  \mathbb{P}(X=k) = \frac{1}{k!\,\Gamma(r)\,\theta^r} \int_0^\infty \lambda^{k+r-1} e^{-\lambda\left(1+\frac{1}{\theta}\right)}\, d\lambda .
+\]
+L'intégrale est celle d'une densité Gamma non normalisée, de forme $k+r$ et d'échelle
+$\left(1+\tfrac{1}{\theta}\right)^{-1}$ ; elle vaut donc
+$\Gamma(k+r)\left(1+\tfrac{1}{\theta}\right)^{-(k+r)}$. D'où :
+\[
+  \mathbb{P}(X=k) = \frac{\Gamma(k+r)}{k!\,\Gamma(r)} \cdot \frac{\left(1+\frac{1}{\theta}\right)^{-(k+r)}}{\theta^r}.
+\]
+En posant $p = \dfrac{1}{1+\theta}$ (donc $1-p = \dfrac{\theta}{1+\theta}$), on a
+$\left(1+\tfrac1\theta\right)^{-1} = \dfrac{\theta}{1+\theta} = 1-p$, et $\theta^{-r} = \left(\dfrac{p}{1-p}\right)^r \cdot$ après simplification on obtient exactement
+\[
+  \mathbb{P}(X=k) = \binom{k+r-1}{k} p^r (1-p)^k,
+\]
+qui est la définition de $\mathrm{NB}(r,p)$ (nombre d'échecs $k$ avant le $r$-ième succès, de
+probabilité de succès $p$). $\blacksquare$
+
+\section{Espérance et variance : la surdispersion vient de là}
+
+Par la loi de l'espérance totale et de la variance totale :
+\[
+  \mathbb{E}[X] = \mathbb{E}[\mathbb{E}[X\mid\Lambda]] = \mathbb{E}[\Lambda] = r\theta,
+\]
+\[
+  \mathrm{Var}(X) = \mathbb{E}[\mathrm{Var}(X\mid\Lambda)] + \mathrm{Var}(\mathbb{E}[X\mid\Lambda])
+  = \mathbb{E}[\Lambda] + \mathrm{Var}(\Lambda) = r\theta + r\theta^2 = r\theta(1+\theta).
+\]
+Donc
+\[
+  \frac{\mathrm{Var}(X)}{\mathbb{E}[X]} = 1+\theta > 1 \quad \text{(sauf si } \theta=0\text{)}.
+\]
+C'est exactement la surdispersion recherchée : plus $\theta$ (donc $\phi$) est grand, plus la
+variance dépasse la moyenne. Quand $\theta \to 0$ (c'est-à-dire $\phi \to 0$, $r \to \infty$),
+$\Lambda$ devient presque déterministe ($\Lambda \to \mu_s$ p.s.) et $X$ retrouve la loi de
+Poisson pure — la NB \emph{contient} le cas Poisson comme cas limite.
+
+\section{Lien avec le code}
+
+Dans \texttt{sequence\_reads}, on veut $X_s \sim \mathrm{NB}(r, p_s)$ avec $r = 1/\phi$ et
+$p_s = r/(r+\mu_s)$. Il faut donc retrouver $\theta$ (l'échelle du Gamma) à partir de $p_s$.
+D'après la proposition, $p = \dfrac{1}{1+\theta}$, donc :
+\[
+  \theta_s = \frac{1-p_s}{p_s}.
+\]
+On vérifie que la moyenne obtenue est bien la bonne :
+\[
+  \mathbb{E}[X_s] = r\,\theta_s = r \cdot \frac{1-p_s}{p_s} = r \cdot \frac{1 - \frac{r}{r+\mu_s}}{\frac{r}{r+\mu_s}}
+  = r \cdot \frac{\mu_s}{r} = \mu_s. \checkmark
+\]
+
+La simulation en JAX découle directement de la proposition :
+\begin{align*}
+  \Lambda_s &\sim \mathrm{Gamma}\!\left(r,\; \theta_s = \frac{1-p_s}{p_s}\right) \\
+  X_s \mid \Lambda_s &\sim \mathrm{Poisson}(\Lambda_s)
+\end{align*}
+ce qui correspond au code :
+\begin{verbatim}
+r  = 1.0 / phi
+p  = r / (r + mu)
+gamma_sample = jax.random.gamma(key_gamma, r, shape=mu.shape) * ((1.0 - p) / p)
+reads        = jax.random.poisson(key_poisson, gamma_sample)
+\end{verbatim}
+\texttt{jax.random.gamma(key, r)} tire un $\mathrm{Gamma}(\text{forme}=r,\ \text{échelle}=1)$ ;
+le multiplier par $\theta_s = (1-p_s)/p_s$ le transforme en $\mathrm{Gamma}(r,\theta_s)$ grâce à
+la propriété d'échelle du Gamma ($\mathrm{Gamma}(r,1)\cdot\theta \sim \mathrm{Gamma}(r,\theta)$).
+
+\section{Résumé}
+
+\begin{itemize}
+  \item La loi NB apparaît naturellement comme un Poisson dont le paramètre $\Lambda$ est
+        lui-même aléatoire (Gamma) : c'est un modèle hiérarchique, pas une coïncidence
+        mathématique.
+  \item Cette hiérarchie a un sens biologique direct : $\Lambda_s$ représente la variabilité
+        \emph{cachée} du nombre de molécules amplifiées (PCR, efficacité de séquençage),
+        et $\mathrm{Poisson}(\Lambda_s)$ le bruit de comptage \emph{une fois} $\Lambda_s$ fixé.
+  \item C'est pour cette raison que JAX, qui n'a pas de tirage NB natif, peut simuler
+        exactement la même loi en deux étapes : \texttt{gamma} puis \texttt{poisson}.
+\end{itemize}
+
+\end{document}
