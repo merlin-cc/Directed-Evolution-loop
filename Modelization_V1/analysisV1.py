@@ -5,6 +5,11 @@ import matplotlib.pyplot as plt
 
 from sequence_classesV1 import *
 
+# Standard 20 amino acid one-letter codes, alphabetical order. The alphabet
+# indices (0..A-1) used elsewhere in this project carry no biological identity
+# of their own -- this is purely a display convention for axis labels.
+AA_LABELS = list("ACDEFGHIKLMNPQRSTVWY")
+
 
 ### ---------------------------- Mathematical analysis --------------------------- ###
 #######################################################################################
@@ -69,30 +74,44 @@ def plot_teacher_weights(F, J=None, title="Teacher model weights"):
     """
     F = np.array(F)
     vmax = np.abs(F).max() or 1.0
+    A, L = F.shape
+    aa_labels = AA_LABELS[:A]
 
     if J is None:
         fig, ax = plt.subplots(figsize=(6, 5))
         im = ax.imshow(F, aspect='auto', cmap='RdBu_r', vmin=-vmax, vmax=vmax)
         ax.set_xlabel('Position')
         ax.set_ylabel('Amino acid')
+        ax.set_xticks(range(L))
+        ax.set_xticklabels([str(i) for i in range(1, L + 1)])
+        ax.set_yticks(range(A))
+        ax.set_yticklabels(aa_labels)
         ax.set_title(title)
         fig.colorbar(im, ax=ax, label='Weight')
         fig.tight_layout()
         return fig
 
     J = np.array(J)
-    j_strength = np.sqrt(np.sum(J ** 2, axis=(2, 3)))  # (L, L) coupling strength per position pair
+    j_strength = np.mean(J, axis=(2, 3))  # (L, L) coupling strength per position pair
 
     fig, axes = plt.subplots(1, 2, figsize=(12, 5))
     im0 = axes[0].imshow(F, aspect='auto', cmap='RdBu_r', vmin=-vmax, vmax=vmax)
     axes[0].set_xlabel('Position')
     axes[0].set_ylabel('Amino acid')
+    axes[0].set_xticks(range(L))
+    axes[0].set_xticklabels([str(i) for i in range(1, L + 1)])
+    axes[0].set_yticks(range(A))
+    axes[0].set_yticklabels(aa_labels)
     axes[0].set_title('F (profile)')
     fig.colorbar(im0, ax=axes[0])
 
     im1 = axes[1].imshow(j_strength, cmap='viridis')
     axes[1].set_xlabel('Position j')
     axes[1].set_ylabel('Position i')
+    axes[1].set_xticks(range(L))
+    axes[1].set_xticklabels([str(i) for i in range(1, L + 1)])
+    axes[1].set_yticks(range(L))
+    axes[1].set_yticklabels([str(i) for i in range(1, L + 1)])
     axes[1].set_title('||J_ij|| coupling strength')
     fig.colorbar(im1, ax=axes[1])
 
@@ -125,26 +144,51 @@ def plot_initial_library_scores(protocol, title="Initial library: viability vs s
 # 3 - Count of each sequence after the viability and selectivity process
 def plot_counts_after_selection(protocol, title="Sequence counts through viability + selectivity"):
     """
-    protocol : a Protocol instance that has already run at least sampling(),
-               produce_capsids() and selectivty() (e.g. via loop_DE()), so that
-               lambda0, lambda2 and lambda3 hold real values.
-    Sequences are sorted by initial abundance (lambda0) for readability.
-    """
-    order = np.argsort(-np.array(protocol.lambda0))
-    l0 = np.array(protocol.lambda0)[order]
-    l2 = np.array(protocol.lambda2)[order]
-    l3 = np.array(protocol.lambda3)[order]
+    3 scatter panels: x = viability score (viab/T_viab), y = count at that stage
+    (lambda2, lambda3, lambda4), color = selectivity score (sel/T_sel) — the two
+    scores are kept on separate visual channels instead of being summed into one
+    axis, so both are readable per point. Same x-axis and color scale across all
+    3 panels. Each panel's legend reports how many variants are still findable
+    (non-zero) at that stage.
 
-    fig, ax = plt.subplots(figsize=(10, 5))
-    x = np.arange(len(l0))
-    ax.plot(x, l0, label='lambda0 (initial)', alpha=0.8)
-    ax.plot(x, l2, label='lambda2 (post-production)', alpha=0.8)
-    ax.plot(x, l3, label='lambda3 (post-selectivity)', alpha=0.8)
-    ax.set_xlabel('Sequence (sorted by initial abundance)')
-    ax.set_ylabel('Count')
-    ax.set_yscale('log')
-    ax.set_title(title)
-    ax.legend()
+    protocol : a Protocol instance that has already run a full round (e.g. via
+               loop_DE()), so lambda2, lambda3 and lambda4 hold real values.
+    """
+    viab_scores = np.array(protocol.compute_score(protocol.F_viab, protocol.J_viab))
+    sel_scores  = np.array(protocol.compute_score(protocol.F_sel, protocol.J_sel))
+    x           = viab_scores / protocol._T_viab
+    c           = sel_scores / protocol._T_sel
+    vmin, vmax  = float(c.min()), float(c.max())
+
+    steps = [
+        ('lambda2', protocol.lambda2, 'post-production (viability)'),
+        ('lambda3', protocol.lambda3, 'post-selectivity'),
+        ('lambda4', protocol.lambda4, 'final library (post-bacterial amplification)'),
+    ]
+
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+
+    for ax, (name, y_arr, label) in zip(axes, steps):
+        y = np.array(y_arr)
+        mask = y > 0
+        n_found = int(mask.sum())
+        if mask.any():
+            sca = ax.scatter(x[mask], y[mask], c=c[mask], cmap='RdYlGn',
+                              vmin=vmin, vmax=vmax, alpha=1, s=45,
+                              edgecolors='black', linewidths=0.6,
+                              label=f'{n_found} variants findable')
+            ax.set_yscale('log')
+            plt.colorbar(sca, ax=ax, label='Selectivity score (sel/T_sel)', fraction=0.046, pad=0.04)
+            ax.legend(loc='upper left', fontsize=9)
+        else:
+            ax.text(0.5, 0.5, 'no data', transform=ax.transAxes,
+                    ha='center', va='center', color='gray')
+        ax.set_xlabel('Viability score (viab/T_viab)')
+        ax.set_ylabel(name)
+        ax.set_title(label)
+        ax.grid(True, linestyle='--', alpha=0.4)
+
+    fig.suptitle(title, fontsize=13)
     fig.tight_layout()
     return fig
 
@@ -231,17 +275,29 @@ def plot_teacher_vs_student(F_teacher, F_student, title="Teacher vs Student weig
     F_student = np.array(F_student)
     vmax = max(np.abs(F_teacher).max(), np.abs(F_student).max()) or 1.0
 
+    A, L = F_teacher.shape
+    aa_labels = AA_LABELS[:A]
+
     fig, axes = plt.subplots(1, 3, figsize=(15, 5))
 
     im0 = axes[0].imshow(F_teacher, aspect='auto', cmap='RdBu_r', vmin=-vmax, vmax=vmax)
     axes[0].set_title('Teacher (ground truth)')
     axes[0].set_xlabel('Position')
     axes[0].set_ylabel('Amino acid')
+    axes[0].set_xticks(range(L))
+    axes[0].set_xticklabels([str(i) for i in range(1, L + 1)])
+    axes[0].set_yticks(range(A))
+    axes[0].set_yticklabels(aa_labels)
     fig.colorbar(im0, ax=axes[0])
 
     im1 = axes[1].imshow(F_student, aspect='auto', cmap='RdBu_r', vmin=-vmax, vmax=vmax)
     axes[1].set_title('Student (recovered)')
     axes[1].set_xlabel('Position')
+    axes[1].set_ylabel('Amino acid')
+    axes[1].set_xticks(range(L))
+    axes[1].set_xticklabels([str(i) for i in range(1, L + 1)])
+    axes[1].set_yticks(range(A))
+    axes[1].set_yticklabels(aa_labels)
     fig.colorbar(im1, ax=axes[1])
 
     r = pearson(F_teacher.ravel(), F_student.ravel())
@@ -258,34 +314,64 @@ def plot_teacher_vs_student(F_teacher, F_student, title="Teacher vs Student weig
 
 
 # 7 - Top k% recovery
-def plot_topk_recovery(score_gt, score_hat, k_fracs=None, title="Top-k% recovery"):
+def plot_topk_recovery(score_gt, score_hat, k_frac=0.10, title=None):
     """
+    GT-vs-predicted score scatter, colored by top-k% recovery category — matches
+    the top-k recovery plot from Ridge_regression_for_linear_model.ipynb (cell 21):
+    Recovered (top-k in both), Missed (GT top-k only), False positive
+    (predicted top-k only), Rest — with the GT/predicted top-k thresholds drawn in.
+
     score_gt, score_hat : (num_sequences,) ground-truth and predicted scores
-    k_fracs             : fractions of the library to evaluate precision_at_k at
-                          (defaults to 2%-50% in 20 steps)
+                          (e.g. combined = viab/T_viab + sel/T_sel)
+    k_frac              : top fraction of the library defining "top-k" (default 10%)
     """
-    if k_fracs is None:
-        k_fracs = np.linspace(0.02, 0.5, 20)
-    precisions = [precision_at_k(score_gt, score_hat, k) for k in k_fracs]
+    score_gt  = np.array(score_gt)
+    score_hat = np.array(score_hat)
+    N = len(score_gt)
+    k = int(N * k_frac)
+
+    top_gt   = set(np.argsort(-score_gt)[:k])
+    top_hat  = set(np.argsort(-score_hat)[:k])
+    both     = np.array(sorted(top_gt & top_hat))
+    only_gt  = np.array(sorted(top_gt - top_hat))
+    only_hat = np.array(sorted(top_hat - top_gt))
+    rest     = np.array(sorted(set(range(N)) - top_gt - top_hat))
 
     fig, ax = plt.subplots(figsize=(7, 5))
-    ax.plot(np.array(k_fracs) * 100, precisions, marker='o', color='tab:blue', label='Precision@k')
-    ax.plot([0, 100], [0, 1], 'k--', alpha=0.3, label='random baseline (E[precision]=k%)')
-    ax.set_xlabel('k (%)')
-    ax.set_ylabel('Precision@k')
-    ax.set_title(title)
-    ax.set_ylim(0, 1.05)
-    ax.legend()
+    ax.scatter(score_gt[rest],     score_hat[rest],     s=4,  alpha=0.2, color='lightgray',   label='Rest')
+    ax.scatter(score_gt[only_hat], score_hat[only_hat], s=12, alpha=0.6, color='darkorange',  label=f'False pos. ({len(only_hat)})')
+    ax.scatter(score_gt[only_gt],  score_hat[only_gt],  s=12, alpha=0.6, color='steelblue',   label=f'Missed ({len(only_gt)})')
+    ax.scatter(score_gt[both],     score_hat[both],     s=12, alpha=0.8, color='forestgreen', label=f'Recovered ({len(both)})')
+
+    lo = float(min(score_gt.min(), score_hat.min()))
+    hi = float(max(score_gt.max(), score_hat.max()))
+    ax.plot([lo, hi], [lo, hi], 'k--', lw=1)
+
+    thr_gt  = float(np.sort(score_gt)[-k])
+    thr_hat = float(np.sort(score_hat)[-k])
+    ax.axvline(thr_gt,  color='steelblue',  linestyle=':', lw=1.2, label='GT threshold')
+    ax.axhline(thr_hat, color='darkorange', linestyle=':', lw=1.2, label='Hat threshold')
+
+    p = precision_at_k(score_gt, score_hat, k_frac=k_frac)
+    ax.set_xlabel('GT score')
+    ax.set_ylabel('Predicted score')
+    ax.set_title(title or f'Top-{int(k_frac * 100)}% recovery   Precision = {p:.3f}')
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.legend(fontsize=9, markerscale=2, borderaxespad=0.3, borderpad=0.4, handlelength=1.2)
     fig.tight_layout()
     return fig
 
 # 8 - Plotting all lambdas for a loop
 def plot_loop_lambdas(protocol, run_loop=True, title="All lambdas for one DE round"):
     """
-    Plots every lambda produced by a single loop_DE() round: the true-pool chain
-    (lambda0 -> lambda1 -> lambda2 -> lambda3 -> lambda4, solid lines) and the
-    NGS-read side-channel (lambda0p, lambda2p, lambda3p, dashed lines, never fed
-    back into the true chain), all sorted by lambda0 for readability.
+    2x4 grid, one scatter panel per lambda produced by a single loop_DE() round.
+    x = viability score (viab/T_viab), y = that stage's lambda, color =
+    selectivity score (sel/T_sel) — the two scores are kept on separate visual
+    channels instead of being summed into one axis, so both are readable per
+    point. Same x-axis and color scale in every panel, so panels are directly
+    comparable. Each panel's legend reports how many variants are still
+    findable (non-zero) at that stage.
 
     protocol : a Protocol instance
     run_loop : if True, calls protocol.loop_DE() to get a fresh round; if False,
@@ -295,30 +381,47 @@ def plot_loop_lambdas(protocol, run_loop=True, title="All lambdas for one DE rou
     if run_loop:
         protocol.loop_DE()
 
-    order = np.argsort(-np.array(protocol.lambda0))
+    viab_scores = np.array(protocol.compute_score(protocol.F_viab, protocol.J_viab))
+    sel_scores  = np.array(protocol.compute_score(protocol.F_sel, protocol.J_sel))
+    x           = viab_scores / protocol._T_viab
+    c           = sel_scores / protocol._T_sel
+    vmin, vmax  = float(c.min()), float(c.max())
 
-    bio_names = ['lambda0', 'lambda1', 'lambda2', 'lambda3', 'lambda4']
-    ngs_names = ['lambda0p', 'lambda2p', 'lambda3p']
+    panels = [
+        ('lambda0',  protocol.lambda0),
+        ('lambda0p', protocol.lambda0p),
+        ('lambda1',  protocol.lambda1),
+        ('lambda2',  protocol.lambda2),
+        ('lambda2p', protocol.lambda2p),
+        ('lambda3',  protocol.lambda3),
+        ('lambda3p', protocol.lambda3p),
+        ('lambda4',  protocol.lambda4),
+    ]
 
-    bio_colors = plt.cm.viridis(np.linspace(0, 0.85, len(bio_names)))
-    ngs_colors = plt.cm.plasma(np.linspace(0, 0.85, len(ngs_names)))
+    fig, axes = plt.subplots(2, 4, figsize=(20, 9))
+    axes = axes.flatten()
 
-    fig, ax = plt.subplots(figsize=(11, 6))
-    x = np.arange(len(order))
+    for ax, (name, y_arr) in zip(axes, panels):
+        y = np.array(y_arr)
+        mask = y > 0
+        n_found = int(mask.sum())
+        if mask.any():
+            sca = ax.scatter(x[mask], y[mask], c=c[mask], cmap='RdYlGn',
+                              vmin=vmin, vmax=vmax, alpha=1, s=45,
+                              edgecolors='black', linewidths=0.6,
+                              label=f'{n_found} variants findable')
+            ax.set_yscale('log')
+            plt.colorbar(sca, ax=ax, label='Selectivity score (sel/T_sel)', fraction=0.046, pad=0.04)
+            ax.legend(loc='upper left', fontsize=8)
+        else:
+            ax.text(0.5, 0.5, 'no data', transform=ax.transAxes,
+                    ha='center', va='center', color='gray')
+        ax.set_xlabel('Viability score (viab/T_viab)')
+        ax.set_ylabel(name)
+        ax.set_title(name)
+        ax.grid(True, linestyle='--', alpha=0.4)
 
-    for name, color in zip(bio_names, bio_colors):
-        y = np.array(getattr(protocol, name))[order]
-        ax.plot(x, y, label=name, color=color, linestyle='-', alpha=0.85)
-
-    for name, color in zip(ngs_names, ngs_colors):
-        y = np.array(getattr(protocol, name))[order]
-        ax.plot(x, y, label=name, color=color, linestyle='--', alpha=0.85)
-
-    ax.set_xlabel('Sequence (sorted by lambda0)')
-    ax.set_ylabel('Count')
-    ax.set_yscale('log')
-    ax.set_title(title)
-    ax.legend(ncol=2, fontsize=9)
+    fig.suptitle(title, fontsize=13)
     fig.tight_layout()
     return fig
 

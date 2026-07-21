@@ -4,17 +4,17 @@ import numpy as np
 
 
 ### -------- Variables -------- ###
-rho   = 1.2e-4
+rho   = 1.e-3
 alpha = 4000
 
-epsilon = 0.3
+epsilon = 0.01
 T_sel   = 0.5    # selectivity temperature
-T_viab  = 1.0    # viability temperature (larger = more uniform production)
-M       = 5
-K_MM    = 1000.0
-N_pcr   = 100_000
-D       = 50_000
-N1      = D
+T_viab  = 0.50    # viability temperature (larger = more uniform production)
+M       = 20
+K_MM    = 100.0
+N_pcr   = 1_000_000
+N1      = 10_000_000
+D       = 100_000_000
 phi     = 0.1    # NB dispersion for sequencing reads (smaller phi = closer to Poisson)
 
 class Lambda():
@@ -30,7 +30,7 @@ class Lambda():
         D     :  int              - Sequencing depth
         """
         self.pool   = pool
-        self.D      = D
+        self.D      = float(D)
         self.key    = key
         self.M      = M
         self.K_MM   = K_MM
@@ -110,15 +110,6 @@ class Protocol():
         """ 
         This class defined method for each block of the road map
         
-        Methods :
-        - First step is initialized by __init__ ✅
-        - NGS are defined by NGS method ✅
-        - Sampling ✅
-        - Production of capsids ✅
-        - Selectivity ✅
-        - Bacterial amplification ✅
-        
-        
         Variables :
         - N0            : number of sequences in the initial library
         - N1            : number of sequences sampled
@@ -143,7 +134,7 @@ class Protocol():
         self.lambda3p   = jnp.zeros(self.d0)
         self.lambda4    = jnp.zeros(self.d0)
         ### ---------------------- ###
-        self.D          = D
+        self.D          = float(D)
         self.F_viab     = F_viab
         self.J_viab     = J_viab
         self.F_sel      = F_sel
@@ -233,12 +224,14 @@ class Protocol():
         - scores       : (d0,) selectivity score s_sel(s), from compute_score(F_sel, J_sel)
         - Z            : (d0,) raw per-sequence noise, Z(s) ~ N(0,1)
         - noisy_scores : (d0,) noisy selectivity score, scores(s) + noise_sel * Z(s)
-        - lambda3      : (d0,) capsid pool after retention, lambda2(s) * exp(noisy_scores(s) / T_sel)
+        - lambda3      : (d0,) capsid pool after retention, lambda2(s) * exp(noisy_scores(s) / T_sel),
+                         thresholded to 0 below 1 (a variant can't have fewer than 1 copy)
         """
         scores  = self.compute_score(self.F_sel, self.J_sel)
         Z       = jax.random.normal(self._next_key(), scores.shape)
         noisy_scores = scores + self.noise_sel * Z
-        self.lambda3 = self.lambda2 * jnp.exp(noisy_scores / self._T_sel)
+        raw_lambda3  = self.lambda2 * jnp.exp(noisy_scores / self._T_sel)
+        self.lambda3 = jnp.where(raw_lambda3 < 1.0, 0.0, raw_lambda3)
         return self.lambda3
 
     def bacterial_amplification(self) -> jax.Array:
@@ -255,7 +248,7 @@ class Protocol():
         pipeline.pool = self.lambda3.astype(jnp.float32)
         self.lambda4  = pipeline.pcr_amplification()
         return self.lambda4
-      
+    
     def loop_DE(self) -> list[list[jax.Array]]:
         """ 
         Runs one full directed-evolution round: sampling -> capsid production -> selectivity,
@@ -301,4 +294,71 @@ class Protocol():
             self.lambda0 = self.lambda4
         return lambdas
     
+###################################################################################################################
+###################################################################################################################
+###################################################################################################################
+############################################### Initializing weights ##############################################
+###################################################################################################################
+###################################################################################################################
+###################################################################################################################
+
+def build_J(interactions):
+    """
+    Build a symmetric (L, L, A, A) coupling tensor from a list of
+    (i, j, a, b, value) entries.  Both (i,j,a,b) and (j,i,b,a) are set.
+    """
+    A, L = 20, 7
+    J = np.zeros((L, L, A, A))
+    for (i, j, a, b, v) in interactions:
+        J[i, j, a, b] += v
+        J[j, i, b, a] += v
+    return jnp.array(J)
+
+def initialize_random_weights(key):
+    """ 
+    Initialize random weights according a given jax key
+    F_v = profile weights for viability
+    F_s = profile weights for selectivity
+    J_v = Pott's weights for viability
+    J_s = Pott's weights for viability
+    """
+    key, key_Fv, key_Fs, key_Jv, key_Js = jax.random.split(key, 5)
+    num_positions   = 7      # L
+    num_amino_acids = 20     # A
     
+    ###############################################
+    ### --------------- F score --------------- ###
+    ###############################################
+    F_v = 0.3*jax.random.normal(key_Fv, shape=(num_amino_acids, num_positions))
+    F_s = 0.3*jax.random.normal(key_Fs, shape=(num_amino_acids, num_positions))
+    
+    ###############################################
+
+    ###############################################
+    ### ------- Pairwise interactions J ------- ###
+    ###############################################
+    Interactions = [
+        [i, j, a, b]
+        for i in range(num_positions)
+        for j in range(i + 1, num_positions)   # i < j to avoid doubling value
+        for a in range(num_amino_acids)
+        for b in range(num_amino_acids)
+    ]
+
+    pair_weights_viab = jax.random.normal(key_Jv, shape=(len(Interactions),))/10
+
+    J_v = build_J([
+        (*ij, float(v))
+        for ij, v in zip(Interactions, pair_weights_viab)
+    ])
+
+    pair_weights_sel = jax.random.normal(key_Js, shape=(len(Interactions),))/10
+
+    J_s = build_J([
+        (*ij, float(v))
+        for ij, v in zip(Interactions, pair_weights_sel)
+    ])
+    
+    ###############################################
+    
+    return F_v, F_s, J_v, J_s
