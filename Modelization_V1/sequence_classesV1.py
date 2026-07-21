@@ -11,14 +11,25 @@ epsilon = 0.01
 T_sel   = 0.5    # selectivity temperature
 T_viab  = 0.50    # viability temperature (larger = more uniform production)
 M       = 20
-K_MM    = 100.0
+
+
+###################################################################################################################
+###################################### These parameters depend on the libaray #####################################
+###################################################################################################################
+K_MM    = 1e6    # saturation scale for the NGS pipeline's PCR step -- must track the typical
+                 # pool size right after pipetting (~N_pcr), not an arbitrary constant
+K_MM_amp= 1e8    # saturation scale for bacterial_amplification -- must track the typical
+                 # total abundance of lambda3, not the NGS pipeline's K_MM
+###################################################################################################################
+###################################################################################################################
+
 N_pcr   = 1_000_000
 N1      = 10_000_000
 D       = 100_000_000
 phi     = 0.1    # NB dispersion for sequencing reads (smaller phi = closer to Poisson)
 
 class Lambda():
-    def __init__(self, pool, D, key) -> None:
+    def __init__(self, pool, D, key, K_MM = K_MM) -> None:
         """
         pool  :  (num_sequences,) - abundance/count vector this pipeline
                                     samples/amplifies/sequences; only relative
@@ -180,7 +191,7 @@ class Protocol():
         - pipeline : temporary Lambda wrapping _lambda, reused for each of the 3 steps
         - reads    : (d0,) final sequencing reads
         """
-        pipeline      = Lambda(_lambda, self._N_pcr, self._next_key())
+        pipeline      = Lambda(_lambda, self._N_pcr, self._next_key(), K_MM=self._K_MM)
         pipeline.pool = pipeline.sample_sequences().astype(jnp.float32)
         pipeline.pool = pipeline.pcr_amplification()
         pipeline.D    = self.D
@@ -244,11 +255,11 @@ class Protocol():
         - pipeline : temporary Lambda wrapping lambda3, reused only for pcr_amplification()
         - lambda4  : (d0,) pool after M growth cycles, saturating at K_MM (same formula as PCR)
         """
-        pipeline      = Lambda(self.lambda3, self.D, self._next_key())
+        pipeline      = Lambda(self.lambda3, self.D, self._next_key(), K_MM = K_MM_amp)
         pipeline.pool = self.lambda3.astype(jnp.float32)
         self.lambda4  = pipeline.pcr_amplification()
         return self.lambda4
-    
+
     def loop_DE(self) -> list[list[jax.Array]]:
         """ 
         Runs one full directed-evolution round: sampling -> capsid production -> selectivity,
