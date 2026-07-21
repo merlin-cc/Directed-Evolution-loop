@@ -2,8 +2,11 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
+from tqdm.auto import tqdm
 
 from sequence_classesV1 import *
+
+message = "file analysis 1.2"
 
 # Standard 20 amino acid one-letter codes, alphabetical order. The alphabet
 # indices (0..A-1) used elsewhere in this project carry no biological identity
@@ -196,15 +199,22 @@ def plot_counts_after_selection(protocol, title="Sequence counts through viabili
 # 4 - The constructed library for next loop, with parameter N (number of loop)
 def plot_library_evolution(protocol, N, threshold=1e3):
     """
-    Runs protocol.N_loop_DE(N) and plots Shannon entropy + sequence diversity of
-    lambda0 (the round's starting library) across N directed-evolution rounds.
+    Runs N rounds of loop_DE() (same reseeding logic as protocol.N_loop_DE(N), but
+    replicated here as an explicit loop so a tqdm progress bar can wrap it) and plots
+    Shannon entropy + sequence diversity of lambda0 (the round's starting library)
+    across N directed-evolution rounds.
 
     Returns
     -------
-    fig, rounds : the matplotlib figure and the raw list returned by N_loop_DE(N),
-                   in case further analysis of the run is needed.
+    fig, rounds : the matplotlib figure and the raw list of [bio_row, ngs_row] pairs
+                   (one per round, same format as N_loop_DE's return value), in case
+                   further analysis of the run is needed.
     """
-    rounds = protocol.N_loop_DE(N)
+    protocol.lambda0 = jnp.full(protocol.d0, protocol.N0 / protocol.d0)
+    rounds = []
+    for _ in tqdm(range(N), desc="Directed evolution rounds"):
+        rounds.append(protocol.loop_DE())
+        protocol.lambda0 = protocol.lambda4
 
     H_list    = []
     diversity = []
@@ -424,6 +434,75 @@ def plot_loop_lambdas(protocol, run_loop=True, title="All lambdas for one DE rou
     fig.suptitle(title, fontsize=13)
     fig.tight_layout()
     return fig
+
+
+# 9 - Top k% recovery of combined score vs final library abundance after N rounds
+def plot_topk_recovery_final_library(protocol, N, k_frac=0.10, title=None):
+    """
+    Runs N rounds of loop_DE() (same reseeding rule as N_loop_DE, wrapped in a tqdm
+    progress bar) and plots combined score (x) vs final-round lambda4 abundance (y),
+    colored by top-k% recovery category -- same recipe as plot_topk_recovery
+    (Recovered / Missed / False positive / Rest), but the two axes are different
+    quantities (a fixed per-sequence score vs a post-amplification count), so the
+    thresholds are drawn as an independent vertical/horizontal line at the k_frac-th
+    percentile of each axis instead of a shared diagonal.
+
+    protocol : a Protocol instance (sequences/F_viab/F_sel/J_viab/J_sel already set)
+    N        : number of directed-evolution rounds to run
+    k_frac   : top fraction defining "top-k" on each axis (default 10%, i.e. the
+               90th percentile threshold lines)
+
+    Returns
+    -------
+    fig, rounds : the matplotlib figure and the raw list of [bio_row, ngs_row] pairs
+                   (one per round, same format as N_loop_DE's return value)
+    """
+    protocol.lambda0 = jnp.full(protocol.d0, protocol.N0 / protocol.d0)
+    rounds = []
+    for _ in tqdm(range(N), desc="Directed evolution rounds"):
+        rounds.append(protocol.loop_DE())
+        protocol.lambda0 = protocol.lambda4
+
+    viab_scores = np.array(protocol.compute_score(protocol.F_viab, protocol.J_viab))
+    sel_scores  = np.array(protocol.compute_score(protocol.F_sel, protocol.J_sel))
+    combined    = viab_scores / protocol._T_viab + sel_scores / protocol._T_sel
+    lambda4     = np.array(protocol.lambda4)
+
+    mask       = lambda4 > 0
+    combined_m = combined[mask]
+    lambda4_m  = lambda4[mask]
+    Nm         = len(combined_m)
+    k          = max(1, int(Nm * k_frac))
+
+    top_score   = set(np.argsort(-combined_m)[:k])
+    top_lambda  = set(np.argsort(-lambda4_m)[:k])
+    both        = np.array(sorted(top_score & top_lambda))
+    only_score  = np.array(sorted(top_score - top_lambda))
+    only_lambda = np.array(sorted(top_lambda - top_score))
+    rest        = np.array(sorted(set(range(Nm)) - top_score - top_lambda))
+
+    fig, ax = plt.subplots(figsize=(7, 5))
+    ax.scatter(combined_m[rest],        lambda4_m[rest],        s=4,  alpha=0.2, color='lightgray',   label='Rest')
+    ax.scatter(combined_m[only_lambda], lambda4_m[only_lambda], s=12, alpha=0.6, color='darkorange',  label=f'False pos. ({len(only_lambda)})')
+    ax.scatter(combined_m[only_score],  lambda4_m[only_score],  s=12, alpha=0.6, color='steelblue',   label=f'Missed ({len(only_score)})')
+    ax.scatter(combined_m[both],        lambda4_m[both],        s=12, alpha=0.8, color='forestgreen', label=f'Recovered ({len(both)})')
+    ax.set_yscale('log')
+
+    thr_score  = float(np.sort(combined_m)[-k])
+    thr_lambda = float(np.sort(lambda4_m)[-k])
+    pct = int(round((1 - k_frac) * 100))
+    ax.axvline(thr_score,  color='steelblue',  linestyle=':', lw=1.2, label=f'score {pct}th pct')
+    ax.axhline(thr_lambda, color='darkorange', linestyle=':', lw=1.2, label=f'lambda4 {pct}th pct')
+
+    precision = len(both) / k if k > 0 else 0.0
+    ax.set_xlabel('Combined score (viab/T_viab + sel/T_sel)')
+    ax.set_ylabel(f'lambda4 (abundance after {N} rounds)')
+    ax.set_title(title or f'Top-{int(k_frac * 100)}% recovery after {N} rounds   Precision = {precision:.3f}')
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.legend(fontsize=9, markerscale=2, borderaxespad=0.3, borderpad=0.4, handlelength=1.2)
+    fig.tight_layout()
+    return fig, rounds
 
 #######################################################################################
 #######################################################################################

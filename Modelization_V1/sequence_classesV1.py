@@ -2,6 +2,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+message = "file 1.3"
 
 ### -------- Variables -------- ###
 rho   = 1.e-3
@@ -10,7 +11,7 @@ alpha = 4000
 epsilon = 0.01
 T_sel   = 0.5    # selectivity temperature
 T_viab  = 0.50    # viability temperature (larger = more uniform production)
-M       = 20
+M       = 40
 
 
 ###################################################################################################################
@@ -203,7 +204,13 @@ class Protocol():
         return self.lambda1
     
     def produce_capsids(self) -> jax.Array:
-        """ 
+        '''
+        Old version, kept for reference (identical distribution to the new one below,
+        but materializes rate and V as full (d0, max_cells) arrays -- expensive once
+        max_cells grows large, e.g. once diversity collapses in later N_loop_DE rounds
+        and abundance concentrates onto a few surviving sequences):
+
+        """
         HEK transfection and per-cell capsid production, modulated by viability score
 
         Variables :
@@ -225,6 +232,35 @@ class Protocol():
         V       = jax.random.poisson(self._next_key(), rate)
 
         self.lambda2 = jnp.sum(jnp.where(mask, V, 0), axis=1)
+        return self.lambda2
+        '''
+
+        """
+        Poisson-additivity rewrite: conditional on the per-cell noises Z_{s,j}, the
+        sum of C_s independent Poisson(rate_{s,j}) draws is EXACTLY Poisson(sum of
+        rate_{s,j}) -- same distribution as the old version above, but only Z/E stay
+        (d0, max_cells); rate and V collapse to a single (d0,) draw, cutting the
+        number of large dense arrays alive at once roughly in half.
+
+        Variables :
+        - C          : (d0,) number of transfected HEK cells per sequence, C_s ~ Poisson(rho * lambda1(s))
+        - Z          : (d0, max_cells) raw per-cell noise, Z_{s,j} ~ N(0,1)
+        - E          : (d0, max_cells) per-cell expression multiplier, E_{s,j} = exp(noise_viab * Z_{s,j}), masked to 0 past C_s
+        - mask       : (d0, max_cells) keeps only the C_s real cells per sequence, discards padding
+        - total_rate : (d0,) alpha * exp(score(s)/T_viab) * sum_j E_{s,j} -- total Poisson rate for sequence s
+        - lambda2    : (d0,) single Poisson draw per sequence, Poisson(total_rate(s))
+        """
+        scores    = self.compute_score(self.F_viab, self.J_viab)
+        C         = jax.random.poisson(self._next_key(), self._rho * self.lambda1.astype(jnp.float32))
+        max_cells = int(jnp.max(C)) + 1
+        cell_idx  = jnp.arange(max_cells)
+        mask      = cell_idx[None, :] < C[:, None]
+
+        Z          = jax.random.normal(self._next_key(), shape=(self.d0, max_cells))
+        E          = jnp.where(mask, jnp.exp(self.noise_viab * Z), 0.0)
+        total_rate = self._alpha * jnp.exp(scores / self._T_viab) * jnp.sum(E, axis=1)
+
+        self.lambda2 = jax.random.poisson(self._next_key(), total_rate).astype(jnp.float32)
         return self.lambda2
     
     def selectivty(self) -> jax.Array:
@@ -304,7 +340,76 @@ class Protocol():
             lambdas.append(self.loop_DE())
             self.lambda0 = self.lambda4
         return lambdas
+
+
+class ProtocolBacterialCFU(Protocol):
+    """
+    Protocol subclass that replaces bacterial_amplification() with a mass/CFU-based
+    model instead of the Michaelis-Menten PCR-style one, using the same signature so
+    loop_DE() picks it up automatically (dynamic dispatch on self.bacterial_amplification()).
+
+    Assumption (per spec): every plasmid molecule ends up in some bacterium -- no
+    plasmid DNA is discarded at the transformation step. The gap between the plasmid
+    count and the resulting number of transformed bacteria (cfu) is because several
+    plasmid copies of the same sequence co-transform a single cell, not because DNA
+    is lost. This model is fully deterministic (no Poisson noise): both the mass
+    conversion and the 36 division cycles are exact multiplications, so lambda4 ends
+    up an EXACT linear rescaling of lambda3 -- relative proportions between variants
+    are perfectly preserved (Spearman correlation = 1.0 up to the sub-1 threshold
+    below), only the absolute scale changes. If you want the bacterial step to
+    reshuffle relative abundances again, this model needs stochastic noise added
+    (e.g. Poisson cfu counts, or per-cycle Poisson division), which isn't in the spec
+    given.
+    """
+
+    CFU_PER_UG       = 5e9    # transformation efficiency: colony-forming units per microgram of plasmid DNA
+    PLASMIDS_PER_UG  = 1.15e11  # molecules of plasmid DNA per microgram
+    N_DIVISIONS      = 36     # bacterial division cycles after transformation
+
+    def bacterial_amplification(self) -> jax.Array:
+        """
+        Variables :
+        - plasmid_mass_ug : (d0,) mass of plasmid DNA per sequence, lambda3(s) / PLASMIDS_PER_UG
+        - cfu             : (d0,) transformed bacteria (founder colonies) per sequence,
+                            plasmid_mass_ug(s) * CFU_PER_UG -- thresholded to 0 below 1
+                            (a variant can't found fewer than 1 colony), same convention
+                            as selectivty()
+        - lambda4_raw     : (d0,) pool after N_DIVISIONS deterministic doubling cycles,
+                            cfu(s) * 2**N_DIVISIONS -- astronomically large in absolute
+                            terms (billions-fold), not usable directly as next round's lambda0
+        - lambda4         : (d0,) lambda4_raw diluted back down to N0 total molecules via
+                            Poisson sub-sampling (same convention as Lambda.sample_sequences()),
+                            so N_loop_DE's successive rounds stay at a stable scale instead
+                            of compounding N_DIVISIONS-fold growth every round
+        """
+        plasmid_mass_ug = self.lambda3 / self.PLASMIDS_PER_UG
+        raw_cfu         = plasmid_mass_ug * self.CFU_PER_UG
+        cfu             = jnp.where(raw_cfu < 1.0, 0.0, raw_cfu)
+        lambda4_raw     = cfu * (2.0 ** self.N_DIVISIONS)
+
+        total       = jnp.sum(lambda4_raw)
+        proportions = jnp.where(total > 0, lambda4_raw / total, 0.0)
+        self.lambda4 = jax.random.poisson(self._next_key(), proportions * self.N0).astype(jnp.float32)
+        return self.lambda4
+
+class ProtocolV2(ProtocolBacterialCFU):
     
+    def selectivty(self) -> jax.Array:
+        """
+        Binomial retention: lambda3(s) ~ Binomial(n=lambda2(s), p=p_s), which
+        guarantees lambda3(s) <= lambda2(s) by construction (no per-cell padded
+        matrix needed, O(d0) memory instead of O(d0 x max_cells)).
+
+        Variables :
+        - scores : (d0,) selectivity score s_sel(s), from compute_score(F_sel, J_sel)
+        - p      : (d0,) retention probability, sigmoid(scores(s) / T_sel)
+        - lambda3: (d0,) capsid pool after retention, Binomial(lambda2(s), p(s))
+        """
+        scores       = self.compute_score(self.F_sel, self.J_sel)
+        p            = jax.nn.sigmoid(scores / self._T_sel)
+        self.lambda3 = jax.random.binomial(self._next_key(), self.lambda2, p).astype(jnp.float32)
+        return self.lambda3
+
 ###################################################################################################################
 ###################################################################################################################
 ###################################################################################################################
@@ -340,8 +445,8 @@ def initialize_random_weights(key):
     ###############################################
     ### --------------- F score --------------- ###
     ###############################################
-    F_v = 0.3*jax.random.normal(key_Fv, shape=(num_amino_acids, num_positions))
-    F_s = 0.3*jax.random.normal(key_Fs, shape=(num_amino_acids, num_positions))
+    F_v = jax.random.normal(key_Fv, shape=(num_amino_acids, num_positions))
+    F_s = jax.random.normal(key_Fs, shape=(num_amino_acids, num_positions))
     
     ###############################################
 
