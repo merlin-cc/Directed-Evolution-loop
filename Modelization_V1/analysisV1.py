@@ -1,12 +1,14 @@
 import numpy as np
+import pandas as pd
 import jax
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
+from matplotlib.colors import LogNorm
 from tqdm.auto import tqdm
 
 from sequence_classesV1 import *
 
-message = "file analysis 1.2"
+message = "file analysis 2.1"
 
 # Standard 20 amino acid one-letter codes, alphabetical order. The alphabet
 # indices (0..A-1) used elsewhere in this project carry no biological identity
@@ -46,6 +48,90 @@ def shannon_entropy(counts):
 def count_over_threshold(counts, threshold=1.0):
     """Number of sequences whose count is >= threshold."""
     return int(np.sum(np.array(counts) >= threshold))
+
+def _resolve_named_arrays(lambdas, names):
+    """Shared helper: accept either a dict {name: array} or a plain list/tuple of
+    arrays (+ optional names list), return (row_names, list_of_arrays)."""
+    if isinstance(lambdas, dict):
+        return list(lambdas.keys()), list(lambdas.values())
+    arrays = list(lambdas)
+    row_names = list(names) if names is not None else [f"seq_{i}" for i in range(len(arrays))]
+    return row_names, arrays
+
+def number_of_seq_threshold(lambdas, thresholds, names=None):
+    """
+    Table of the number of sequences with a count >= threshold, for several lambdas
+    and thresholds -- one row per lambda, one column per threshold.
+
+    lambdas    : either a dict {name: array} (e.g. {"lambda0": protocol.lambda0, ...}),
+                 or a plain list/tuple/2D array of arrays -- in that case pass `names`
+                 too (a name can't be recovered from a bare array value), e.g.:
+                     number_of_seq_threshold(
+                         lambdas=[lambda0, lambda1, lambda2, lambda3, lambda4],
+                         names=["lambda0", "lambda1", "lambda2", "lambda3", "lambda4"],
+                         thresholds=threshold_values,
+                     )
+                 If `names` is omitted for a non-dict input, rows are labelled by
+                 position ("seq_0", "seq_1", ...) instead of guessing lambda names.
+    thresholds : list of thresholds to check, e.g. [1, 10, 100, 1000]
+    names      : optional list of row labels, only used when `lambdas` isn't a dict
+
+    Returns
+    -------
+    pandas.DataFrame, rows = lambda names, columns = thresholds, values = count_over_threshold
+    """
+    if lambdas is None or thresholds is None:
+        return None
+
+    row_names, arrays = _resolve_named_arrays(lambdas, names)
+    thresholds = [float(t) for t in thresholds]  # jax/numpy scalars aren't hashable as dict/column keys
+
+    table = pd.DataFrame(
+        {threshold: [count_over_threshold(arr, threshold) for arr in arrays]
+         for threshold in thresholds},
+        index=row_names,
+    )
+    table.index.name = "lambda"
+    return table
+
+
+def proportion_above_threshold(lambdas, thresholds_pct, names=None):
+    """
+    Table of how many sequences have a relative abundance above a given percentage
+    of the total pool -- one row per lambda, one column per threshold.
+
+    lambdas        : either a dict {name: array} (e.g. {"lambda0": protocol.lambda0,
+                     ...}), or a plain list/tuple of arrays -- pass `names` too in
+                     that case (same convention as number_of_seq_threshold)
+    thresholds_pct : list of percentages to check, e.g. [0.1, 0.01, 0.001] means
+                     "present at more than 0.1% / 0.01% / 0.001% of the pool total"
+    names          : optional list of row labels, only used when `lambdas` isn't a dict
+
+    Returns
+    -------
+    pandas.DataFrame, rows = lambda names, columns = "> X%" thresholds, values =
+    number of sequences with count/sum(count) > threshold_pct/100
+    """
+    if lambdas is None or thresholds_pct is None:
+        return None
+
+    row_names, arrays = _resolve_named_arrays(lambdas, names)
+    thresholds_pct = [float(t) for t in thresholds_pct]
+
+    def _count_abundant(arr, pct):
+        arr = np.array(arr, dtype=float)
+        total = arr.sum()
+        if total <= 0:
+            return 0
+        proportions = arr / total
+        return int(np.sum(proportions > pct / 100.0))
+
+    table = pd.DataFrame(
+        {f"> {pct:g}%": [_count_abundant(arr, pct) for arr in arrays] for pct in thresholds_pct},
+        index=row_names,
+    )
+    table.index.name = "lambda"
+    return table
 
 #######################################################################################
 #######################################################################################
@@ -435,6 +521,109 @@ def plot_loop_lambdas(protocol, run_loop=True, title="All lambdas for one DE rou
     fig.tight_layout()
     return fig
 
+
+# 10 - Viability vs selectivity score, colored by each lambda stage
+def plot_all_lambda_scores(protocol, title="Viability vs selectivity score, colored by each lambda"):
+    """
+    2x4 grid, one panel per lambda (lambda0, lambda0p, lambda1, lambda2, lambda2p,
+    lambda3, lambda3p, lambda4) -- same recipe as plot_initial_library_scores
+    (x = viability score, y = selectivity score, color = abundance at that stage),
+    but one panel per stage instead of only lambda0. Color uses a log scale (counts
+    span many orders of magnitude), so each panel only plots sequences with nonzero
+    abundance at that particular stage.
+
+    protocol : a Protocol instance that has already run at least one round (e.g.
+               via loop_DE()), so all lambda* attributes hold real values.
+    """
+    viab_scores = np.array(protocol.compute_score(protocol.F_viab, protocol.J_viab))
+    sel_scores  = np.array(protocol.compute_score(protocol.F_sel, protocol.J_sel))
+
+    panels = [
+        ('lambda0',  protocol.lambda0),
+        ('lambda0p', protocol.lambda0p),
+        ('lambda1',  protocol.lambda1),
+        ('lambda2',  protocol.lambda2),
+        ('lambda2p', protocol.lambda2p),
+        ('lambda3',  protocol.lambda3),
+        ('lambda3p', protocol.lambda3p),
+        ('lambda4',  protocol.lambda4),
+    ]
+
+    fig, axes = plt.subplots(2, 4, figsize=(20, 9))
+    axes = axes.flatten()
+
+    for ax, (name, counts) in zip(axes, panels):
+        counts = np.array(counts)
+        mask = counts > 0
+        if mask.any():
+            sca = ax.scatter(viab_scores[mask], sel_scores[mask], c=counts[mask],
+                              cmap='viridis', norm=LogNorm(), s=14, alpha=0.8,
+                              edgecolors='none')
+            fig.colorbar(sca, ax=ax, label=name, fraction=0.046, pad=0.04)
+        else:
+            ax.text(0.5, 0.5, 'no data', transform=ax.transAxes,
+                    ha='center', va='center', color='gray')
+        ax.set_xlabel('Viability score')
+        ax.set_ylabel('Selectivity score')
+        ax.set_title(name)
+        ax.grid(True, linestyle='--', alpha=0.4)
+
+    fig.suptitle(title, fontsize=13)
+    fig.tight_layout()
+    return fig
+
+
+def plot_lambda3p_dilution_scatter(protocol, dilution_factors, title=None):
+    """
+    Scatter of every variant (x = viability score, y = selectivity score), layered
+    once per dilution_factor: smallest dilution (most variants found) is drawn first
+    in red, then each successively larger dilution_factor is drawn on top moving
+    toward blue.
+
+    Because later (bluer) layers are drawn on top wherever a variant is still found,
+    a point that stays visibly RED marks a variant that was found at a weak dilution
+    but LOST once dilution increased. A point that ends up BLUE survived even the
+    strongest dilution tested. This makes the inclusion/attrition pattern directly
+    readable off the plot: cluster the surviving (blue) points against viability/
+    selectivity score to see whether loss is uniform or concentrated on
+    low-score (inefficient) variants -- which is expected, since low-score variants
+    sit at lower abundance and are the first to be zeroed out by the dilution's
+    Poisson bottleneck.
+
+    NOTE: this inclusion is only approximate (~97-99.8% overlap between consecutive
+    levels, verified numerically), not exact -- each dilution_factor redraws
+    independent randomness rather than literally sub-sampling the previous draw.
+
+    Uses protocol.lambda3 as the pre-NGS pool (i.e. plots lambda3p at each dilution).
+    """
+    dilution_factors = sorted(float(d) for d in dilution_factors)
+    viab_scores = np.array(protocol.compute_score(protocol.F_viab, protocol.J_viab))
+    sel_scores  = np.array(protocol.compute_score(protocol.F_sel, protocol.J_sel))
+
+    from matplotlib.colors import LinearSegmentedColormap, LogNorm as _LogNorm
+    cmap = LinearSegmentedColormap.from_list('dilution_cmap', ['lightcoral', 'cornflowerblue'])
+    norm = _LogNorm(vmin=min(dilution_factors), vmax=max(dilution_factors))
+
+    fig, ax = plt.subplots(figsize=(8, 6.5))
+    orig_dilution = protocol.dilution_factor
+    for d in dilution_factors:  # small (red) first -> back layer; large (blue) last -> front layer
+        protocol.dilution_factor = d
+        lam3p = np.array(protocol.NGS(protocol.lambda3))
+        mask = lam3p > 0
+        ax.scatter(viab_scores[mask], sel_scores[mask], color=cmap(norm(d)),
+                   s=28, edgecolors='none', alpha=0.85, zorder=d)
+    protocol.dilution_factor = orig_dilution
+
+    ax.set_xlabel('Viability score')
+    ax.set_ylabel('Selectivity score')
+    ax.set_title(title or 'lambda3p variants retained across dilution factors (red = low dilution, blue = high dilution)')
+    ax.grid(True, linestyle='--', alpha=0.3)
+    sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+    sm.set_array([])
+    cbar = fig.colorbar(sm, ax=ax)
+    cbar.set_label('Dilution factor')
+    fig.tight_layout()
+    return fig
 
 #######################################################################################
 #######################################################################################

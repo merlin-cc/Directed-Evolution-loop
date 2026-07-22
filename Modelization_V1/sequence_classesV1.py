@@ -2,7 +2,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-message = "file 1.3"
+message = "file 1.9"
 
 ### -------- Variables -------- ###
 rho   = 1.e-3
@@ -26,11 +26,11 @@ K_MM_amp= 1e8    # saturation scale for bacterial_amplification -- must track th
 
 N_pcr   = 1_000_000
 N1      = 10_000_000
-D       = 100_000_000
+D       = 10_000_000_000
 phi     = 0.1    # NB dispersion for sequencing reads (smaller phi = closer to Poisson)
 
 class Lambda():
-    def __init__(self, pool, D, key, K_MM = K_MM) -> None:
+    def __init__(self, pool, dilution_factor, D, key, K_MM = K_MM) -> None:
         """
         pool  :  (num_sequences,) - abundance/count vector this pipeline
                                     samples/amplifies/sequences; only relative
@@ -39,9 +39,11 @@ class Lambda():
                                     a bare array — compute_score is the only
                                     thing that needs identity, and it never
                                     goes through this class)
+        diltuion factor : int     - Dilution factor for the sampling
         D     :  int              - Sequencing depth
         """
         self.pool   = pool
+        self.dilution_factor = dilution_factor
         self.D      = float(D)
         self.key    = key
         self.M      = M
@@ -60,9 +62,15 @@ class Lambda():
         """
         Pipetting is simulated by a Poisson distribution
         """
+        """
         proportions = self.pool / jnp.sum(self.pool)
-        return jax.random.poisson(self._next_key(), proportions * self.D)
-
+        return jax.random.poisson(self._next_key(), proportions * self.N1)
+        """
+        N_sample = jnp.sum(self.pool)/self.dilution_factor #dilution by 10
+        proportions = self.pool / jnp.sum(self.pool)
+        return jax.random.poisson(self._next_key(), proportions * N_sample)
+        
+        
     def sequence_reads(self) -> jax.Array:
         """
         The sequencing is simulated by a Negative Binomial distribution, matching
@@ -115,7 +123,7 @@ class Lambda():
         
 
 class Protocol():
-    def __init__(self, N0, N1, sequences, D, F_viab, J_viab, F_sel, 
+    def __init__(self, N0, N1, dilution_factor, sequences, D, F_viab, J_viab, F_sel, 
                  J_sel, noise_viab, noise_sel, alpha = alpha, 
                  rho = rho, T_viab = T_viab, T_sel = T_sel, M = M, 
                  K_MM = K_MM, N_pcr = N_pcr) -> None:
@@ -134,6 +142,7 @@ class Protocol():
         self.model      = "Potts"
         self.N0         = N0
         self.N1         = N1
+        self.dilution_factor = dilution_factor
         self.sequence   = sequences
         self.d0         = sequences.shape[0]
         self.lambda0    = jnp.full(self.d0, self.N0/self.d0)
@@ -192,10 +201,10 @@ class Protocol():
         - pipeline : temporary Lambda wrapping _lambda, reused for each of the 3 steps
         - reads    : (d0,) final sequencing reads
         """
-        pipeline      = Lambda(_lambda, self._N_pcr, self._next_key(), K_MM=self._K_MM)
+        pipeline      = Lambda(_lambda, self.dilution_factor, self._N_pcr, self._next_key(), K_MM=self._K_MM)
+        pipeline.D    = self.D
         pipeline.pool = pipeline.sample_sequences().astype(jnp.float32)
         pipeline.pool = pipeline.pcr_amplification()
-        pipeline.D    = self.D
         return pipeline.sequence_reads()
     
     def sampling(self) -> jax.Array:
@@ -291,7 +300,7 @@ class Protocol():
         - pipeline : temporary Lambda wrapping lambda3, reused only for pcr_amplification()
         - lambda4  : (d0,) pool after M growth cycles, saturating at K_MM (same formula as PCR)
         """
-        pipeline      = Lambda(self.lambda3, self.D, self._next_key(), K_MM = K_MM_amp)
+        pipeline      = Lambda(self.lambda3, self.N1, self.D, self._next_key(), K_MM = K_MM_amp)
         pipeline.pool = self.lambda3.astype(jnp.float32)
         self.lambda4  = pipeline.pcr_amplification()
         return self.lambda4
