@@ -38,11 +38,12 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 from sklearn.model_selection import KFold
+from tqdm.auto import tqdm
 
 from sequence_classesV1 import *
 from analysisV1 import pearson, precision_at_k
 
-message = "file regression 1.0"
+message = "file regression 1.2"
 
 L = 7   # num_positions, matches Protocol.compute_score's hardcoded range(7)
 A = 20  # num_amino_acids
@@ -113,7 +114,7 @@ def build_multi_round_dataset(protocol, n_rounds, eps=0.5):
     seqs_viab_list, y_viab_list = [], []
     seqs_sel_list,  y_sel_list  = [], []
 
-    for bio_row, ngs_row in rounds:
+    for bio_row, ngs_row in tqdm(rounds, total=n_rounds, desc="Simulating DE rounds", leave=False):
         lambda0p, lambda2p, lambda3p = (np.array(a, dtype=float) for a in ngs_row)
 
         mask_v = lambda0p > 0
@@ -141,7 +142,7 @@ def build_multi_round_dataset(protocol, n_rounds, eps=0.5):
 ### ---------------------------- Ridge fit + CV --------------------------- ###
 #######################################################################################
 
-def ridge_cv_mse_potts(X, y, lambdas, kf):
+def ridge_cv_mse_potts(X, y, lambdas, kf, desc="Ridge CV"):
     """
     K-fold CV MSE for Ridge regression on the Potts feature matrix, sweeping
     a grid of L2 penalties. The bias column (last column of X) is never
@@ -149,7 +150,7 @@ def ridge_cv_mse_potts(X, y, lambdas, kf):
     """
     mse = np.zeros(len(lambdas))
     n_feat = X.shape[1]
-    for tr, va in kf.split(X):
+    for tr, va in tqdm(list(kf.split(X)), desc=desc, leave=False):
         Xtr, ytr = X[tr], y[tr]
         Xva, yva = X[va], y[va]
         G   = Xtr.T @ Xtr
@@ -204,7 +205,17 @@ def recover_weights_from_NGS(protocol, n_rounds=5, lambdas_grid=None, k_folds=5,
         info : dict with best lambda per step, CV curves, and dataset sizes
     """
     if lambdas_grid is None:
-        lambdas_grid = np.logspace(-1, 3, 15)
+        # Floor of 0.1 keeps every fold's (G + lam*I) solve well away from the
+        # p>>n null-space blowup (8541 Potts features vs. a few thousand
+        # observed sequences at best -- float32 roundoff on G's ~zero
+        # eigenvalues gets divided by lam and explodes for lam below ~0.1).
+        # Ceiling is generous since large lam is numerically safe (it can
+        # only underfit, never blow up) -- see the boundary check below.
+        lambdas_grid = np.logspace(-1, 6, 15)
+        print(f"lambdas_grid was not defined thus lambdas_grid = {lambdas_grid}")
+
+    if verbose:
+        print(f"JAX backend: {jax.default_backend()} -- devices: {jax.devices()}")
 
     seqs_viab, y_viab, seqs_sel, y_sel = build_multi_round_dataset(protocol, n_rounds, eps=eps)
 
@@ -214,18 +225,24 @@ def recover_weights_from_NGS(protocol, n_rounds=5, lambdas_grid=None, k_folds=5,
 
     X_viab = build_potts_features(seqs_viab)
     X_sel  = build_potts_features(seqs_sel)
+    print("Just finished building the Potts features")
 
     kf = KFold(n_splits=k_folds, shuffle=True, random_state=seed)
 
-    cv_viab  = ridge_cv_mse_potts(X_viab, y_viab, lambdas_grid, kf)
+    cv_viab  = ridge_cv_mse_potts(X_viab, y_viab, lambdas_grid, kf, desc="CV (viability)")
     lam_viab = float(lambdas_grid[np.argmin(cv_viab)])
 
-    cv_sel  = ridge_cv_mse_potts(X_sel, y_sel, lambdas_grid, kf)
+    cv_sel  = ridge_cv_mse_potts(X_sel, y_sel, lambdas_grid, kf, desc="CV (selectivity)")
     lam_sel = float(lambdas_grid[np.argmin(cv_sel)])
 
     if verbose:
         print(f"Best lambda (viability)   : {lam_viab:.4f}")
         print(f"Best lambda (selectivity) : {lam_sel:.4f}")
+        for name, lam in (("viability", lam_viab), ("selectivity", lam_sel)):
+            if lam in (lambdas_grid[0], lambdas_grid[-1]):
+                edge = "lower" if lam == lambdas_grid[0] else "upper"
+                print(f"  WARNING: best lambda ({name}) is at the {edge} grid boundary "
+                      f"({lam:.4g}) -- the true optimum may lie outside lambdas_grid; widen it.")
 
     F_viab_hat, J_viab_hat = fit_weights_potts(X_viab, y_viab, protocol._T_viab, lam=lam_viab)
     F_sel_hat,  J_sel_hat  = fit_weights_potts(X_sel,  y_sel,  protocol._T_sel,  lam=lam_sel)
