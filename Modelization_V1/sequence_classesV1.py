@@ -1,8 +1,9 @@
 import jax
 import jax.numpy as jnp
 import numpy as np
+from tqdm.auto import tqdm
 
-message = "file 1.9"
+message = "file 2.1"
 
 ### -------- Variables -------- ###
 rho   = 1.e-3
@@ -24,7 +25,7 @@ K_MM_amp= 1e8    # saturation scale for bacterial_amplification -- must track th
 ###################################################################################################################
 ###################################################################################################################
 
-N_pcr   = 1_000_000
+
 N1      = 10_000_000
 D       = 10_000_000_000
 phi     = 0.1    # NB dispersion for sequencing reads (smaller phi = closer to Poisson)
@@ -48,7 +49,6 @@ class Lambda():
         self.key    = key
         self.M      = M
         self.K_MM   = K_MM
-        self.N_pcr  = N_pcr
         self.phi    = phi
 
     def _next_key(self) -> jax.Array:
@@ -102,7 +102,7 @@ class Lambda():
         (num_sequences,) float array — amplified pool
         """
         self.pool = self.pool.astype(jnp.float32)
-        for _ in range(self.M):
+        for _ in tqdm(range(self.M), desc="PCR cycles", leave=False):
             p_n       = 1.0 / (1.0 + jnp.sum(self.pool) / self.K_MM)
             self.pool = self.pool + jax.random.poisson(self._next_key(), self.pool * p_n).astype(jnp.float32)
         return self.pool
@@ -126,17 +126,26 @@ class Protocol():
     def __init__(self, N0, N1, dilution_factor, sequences, D, F_viab, J_viab, F_sel, 
                  J_sel, noise_viab, noise_sel, alpha = alpha, 
                  rho = rho, T_viab = T_viab, T_sel = T_sel, M = M, 
-                 K_MM = K_MM, N_pcr = N_pcr) -> None:
+                 K_MM = K_MM) -> None:
         """ 
         This class defined method for each block of the road map
         
         Variables :
-        - N0            : number of sequences in the initial library
-        - N1            : number of sequences sampled
-        - sequences     : (num_sequences, 7) list of sequences in the library
-        - d0            : Initial diversity
-        - lambda0       : initial library (fully deterministic)
-        - D             : Depth
+        - N0                : number of sequences in the initial library
+        - N1                : initial number of sequences sampled
+        - dilution factor   : factor of dilution for sampling step in NGS
+        - sequences         : (num_sequences, 7) list of sequences in the library
+        - d0                : initial diversity (set by sequences.shape[0])
+        - lambda0           : initial library (fully deterministic)
+        - D                 : depth for NGS
+        - F_viab or _sel    : profile scores
+        - J_viab or _sel    : pott's scores
+        - noise_viab / _sel : noise Z in viability and selectivity steps
+        - alpha             : number of capsids per HEK cell transfected
+        - rho               : number of HEK cells per plasmids transfected
+        - T_viab or sel     : viability or selectivity pressure
+        - M                 : number of PCR cycle
+        - K_MM              : michaelis constant for PCR
         """
         self.key        = jax.random.key(42)
         self.model      = "Potts"
@@ -163,13 +172,12 @@ class Protocol():
         self.noise_viab = noise_viab
         self.noise_sel  = noise_sel
         ### ---- Other values ---- ###
-        self._alpha      = alpha
-        self._rho        = rho
-        self._T_viab     = T_viab
-        self._T_sel      = T_sel
-        self._M          = M
-        self._K_MM       = K_MM
-        self._N_pcr      = N_pcr
+        self._alpha     = alpha
+        self._rho       = rho
+        self._T_viab    = T_viab
+        self._T_sel     = T_sel
+        self._M         = M
+        self._K_MM      = K_MM
         ### ---------------------- ###
     
     def _next_key(self) -> jax.Array:
@@ -201,13 +209,12 @@ class Protocol():
         - pipeline : temporary Lambda wrapping _lambda, reused for each of the 3 steps
         - reads    : (d0,) final sequencing reads
         """
-        pipeline      = Lambda(_lambda, self.dilution_factor, self._N_pcr, self._next_key(), K_MM=self._K_MM)
-        pipeline.D    = self.D
+        pipeline      = Lambda(_lambda, self.dilution_factor, self.D, self._next_key(), K_MM=self._K_MM)
         pipeline.pool = pipeline.sample_sequences().astype(jnp.float32)
         pipeline.pool = pipeline.pcr_amplification()
         return pipeline.sequence_reads()
     
-    def sampling(self) -> jax.Array:
+    def initial_sampling(self) -> jax.Array:
         mu_1 = self.N1 * self.lambda0 / jnp.sum(self.lambda0)
         self.lambda1 = jax.random.poisson(self._next_key(), mu_1)
         return self.lambda1
@@ -324,7 +331,7 @@ class Protocol():
         """
         self.lambda0  = self.lambda0
         self.lambda0p = self.NGS(self.lambda0)
-        self.lambda1  = self.sampling()
+        self.lambda1  = self.initial_sampling()
         self.lambda2  = self.produce_capsids()
         self.lambda2p = self.NGS(self.lambda2)
         self.lambda3  = self.selectivty()
@@ -345,7 +352,7 @@ class Protocol():
         """
         self.lambda0 = jnp.full(self.d0, self.N0/self.d0)
         lambdas = []
-        for _ in range(number_of_loop):
+        for _ in tqdm(range(number_of_loop), desc="Directed evolution rounds"):
             lambdas.append(self.loop_DE())
             self.lambda0 = self.lambda4
         return lambdas

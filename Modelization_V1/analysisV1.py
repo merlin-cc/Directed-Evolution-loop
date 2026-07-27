@@ -4,11 +4,10 @@ import jax
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
-from tqdm.auto import tqdm
 
 from sequence_classesV1 import *
 
-message = "file analysis 2.1"
+message = "file analysis 2.3"
 
 # Standard 20 amino acid one-letter codes, alphabetical order. The alphabet
 # indices (0..A-1) used elsewhere in this project carry no biological identity
@@ -285,10 +284,10 @@ def plot_counts_after_selection(protocol, title="Sequence counts through viabili
 # 4 - The constructed library for next loop, with parameter N (number of loop)
 def plot_library_evolution(protocol, N, threshold=1e3):
     """
-    Runs N rounds of loop_DE() (same reseeding logic as protocol.N_loop_DE(N), but
-    replicated here as an explicit loop so a tqdm progress bar can wrap it) and plots
-    Shannon entropy + sequence diversity of lambda0 (the round's starting library)
-    across N directed-evolution rounds.
+    Runs N rounds via protocol.N_loop_DE(N) (which now shows its own tqdm progress
+    bar directly in sequence_classesV1.py) and plots Shannon entropy + sequence
+    diversity of lambda0 (the round's starting library) across N directed-evolution
+    rounds.
 
     Returns
     -------
@@ -296,11 +295,7 @@ def plot_library_evolution(protocol, N, threshold=1e3):
                    (one per round, same format as N_loop_DE's return value), in case
                    further analysis of the run is needed.
     """
-    protocol.lambda0 = jnp.full(protocol.d0, protocol.N0 / protocol.d0)
-    rounds = []
-    for _ in tqdm(range(N), desc="Directed evolution rounds"):
-        rounds.append(protocol.loop_DE())
-        protocol.lambda0 = protocol.lambda4
+    rounds = protocol.N_loop_DE(N)
 
     H_list    = []
     diversity = []
@@ -594,34 +589,41 @@ def plot_lambda3p_dilution_scatter(protocol, dilution_factors, title=None):
     levels, verified numerically), not exact -- each dilution_factor redraws
     independent randomness rather than literally sub-sampling the previous draw.
 
+    Each dilution_factor gets its own discrete color (not a gradient) -- smallest
+    dilution first (drawn at the back), largest last (drawn on top), so a point still
+    showing an earlier (smaller-dilution) color was lost once dilution increased.
+
     Uses protocol.lambda3 as the pre-NGS pool (i.e. plots lambda3p at each dilution).
     """
     dilution_factors = sorted(float(d) for d in dilution_factors)
     viab_scores = np.array(protocol.compute_score(protocol.F_viab, protocol.J_viab))
     sel_scores  = np.array(protocol.compute_score(protocol.F_sel, protocol.J_sel))
 
-    from matplotlib.colors import LinearSegmentedColormap, LogNorm as _LogNorm
-    cmap = LinearSegmentedColormap.from_list('dilution_cmap', ['lightcoral', 'cornflowerblue'])
-    norm = _LogNorm(vmin=min(dilution_factors), vmax=max(dilution_factors))
+    # Fixed, explicit palette (avoids relying on Colormap.colors, which static
+    # type checkers like Pylance don't recognize on the generic Colormap type).
+    _PALETTE = [
+        '#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd',
+        '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf',
+    ]
+    colors = [_PALETTE[i % len(_PALETTE)] for i in range(len(dilution_factors))]
 
     fig, ax = plt.subplots(figsize=(8, 6.5))
     orig_dilution = protocol.dilution_factor
-    for d in dilution_factors:  # small (red) first -> back layer; large (blue) last -> front layer
+    for i, d in enumerate(dilution_factors):  # smallest first -> back layer; largest last -> front layer
         protocol.dilution_factor = d
         lam3p = np.array(protocol.NGS(protocol.lambda3))
         mask = lam3p > 0
-        ax.scatter(viab_scores[mask], sel_scores[mask], color=cmap(norm(d)),
-                   s=28, edgecolors='none', alpha=0.85, zorder=d)
+        n_found = int(mask.sum())
+        ax.scatter(viab_scores[mask], sel_scores[mask], color=colors[i],
+                   s=28, edgecolors='none', alpha=0.85, zorder=i,
+                   label=f'dilution_factor = {d:g}  (n={n_found})')
     protocol.dilution_factor = orig_dilution
 
     ax.set_xlabel('Viability score')
     ax.set_ylabel('Selectivity score')
-    ax.set_title(title or 'lambda3p variants retained across dilution factors (red = low dilution, blue = high dilution)')
+    ax.set_title(title or 'lambda3p variants retained across dilution factors')
     ax.grid(True, linestyle='--', alpha=0.3)
-    sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
-    sm.set_array([])
-    cbar = fig.colorbar(sm, ax=ax)
-    cbar.set_label('Dilution factor')
+    ax.legend(title='Dilution factor', loc='best', framealpha=0.9)
     fig.tight_layout()
     return fig
 
