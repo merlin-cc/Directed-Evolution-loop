@@ -43,7 +43,7 @@ from tqdm.auto import tqdm
 from sequence_classesV1 import *
 from analysisV1 import pearson, precision_at_k
 
-message = "file regression 1.2"
+message = "file regression 1.3"
 
 L = 7   # num_positions, matches Protocol.compute_score's hardcoded range(7)
 A = 20  # num_amino_acids
@@ -211,7 +211,7 @@ def recover_weights_from_NGS(protocol, n_rounds=5, lambdas_grid=None, k_folds=5,
         # eigenvalues gets divided by lam and explodes for lam below ~0.1).
         # Ceiling is generous since large lam is numerically safe (it can
         # only underfit, never blow up) -- see the boundary check below.
-        lambdas_grid = np.logspace(-1, 6, 15)
+        lambdas_grid = np.logspace(-1, 2, 30)
         print(f"lambdas_grid was not defined thus lambdas_grid = {lambdas_grid}")
 
     if verbose:
