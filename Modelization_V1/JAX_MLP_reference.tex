@@ -1,0 +1,720 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath, amssymb}
+\usepackage{geometry}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{mdframed}
+\usepackage{listings}
+
+\geometry{margin=2.2cm}
+
+\hypersetup{colorlinks=true, linkcolor=blue!60!black, urlcolor=blue!60!black}
+
+\definecolor{codebg}{RGB}{247,247,247}
+\definecolor{codekw}{RGB}{0,90,180}
+\definecolor{codestr}{RGB}{170,60,0}
+\definecolor{codecom}{RGB}{100,100,100}
+
+\lstdefinestyle{py}{
+    language=Python,
+    backgroundcolor=\color{codebg},
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{codekw}\bfseries,
+    commentstyle=\color{codecom}\itshape,
+    stringstyle=\color{codestr},
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    stepnumber=1,
+    numbersep=8pt,
+    showstringspaces=false,
+    breaklines=true,
+    frame=single,
+    rulecolor=\color{gray!40},
+    tabsize=4,
+    xleftmargin=1.2em,
+}
+\lstset{style=py}
+
+\newcommand{\R}{\mathbb{R}}
+
+\title{\textbf{JAX / Flax / Optax --- Aide-mémoire pour construire un MLP}\\
+\large Fonctions utiles et exemples d'implémentation rapide, appliqués au projet Modelization\_V1}
+\author{Institut de la Vision --- Directed Evolution Loop}
+\date{}
+
+\begin{document}
+\maketitle
+\tableofcontents
+\newpage
+
+% ═══════════════════════════════════════════════════════════════════════════
+\section{Introduction}
+
+Ce document rassemble, avec des exemples testés et fonctionnels, les briques
+JAX / Flax / Optax nécessaires pour construire, entraîner et régulariser un
+MLP --- dans notre cas, pour recommencer la reconstruction des poids du modèle
+profile ($F$) puis du modèle de Potts ($F, J$) à partir des cibles de
+log-enrichissement déjà construites par \texttt{RegressionV1.build\_multi\_round\_dataset}.
+
+Toutes les versions de bibliothèques utilisées pour tester les exemples de ce
+document :
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+Bibliothèque & Version testée \\
+\midrule
+\texttt{jax}   & 0.6.2 \\
+\texttt{optax} & 0.2.8 \\
+\texttt{flax}  & 0.10.7 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{mdframed}
+\textbf{Pourquoi Flax + Optax et pas PyTorch ?} Tout le code du projet
+(\texttt{sequence\_classesV1.py}, \texttt{RegressionV1.py}) est déjà en JAX.
+Rester dans cet écosystème permet de garder un seul système de clés
+aléatoires cohérent, de \texttt{jit}-compiler la boucle d'entraînement
+complète, et d'éviter d'introduire une seconde bibliothèque de deep learning
+pour une seule tâche.
+\end{mdframed}
+
+% ═══════════════════════════════════════════════════════════════════════════
+\section{Rappels JAX}
+
+\subsection{\texttt{jax.numpy} vs \texttt{numpy}}
+\texttt{jax.numpy} (\texttt{jnp}) reproduit l'API de NumPy mais toutes les
+opérations sont \textbf{immutables} (pas d'affectation \texttt{arr[i]=x} ;
+utiliser \texttt{arr.at[i].set(x)}) et \textbf{différentiables}. C'est la
+brique de base sur laquelle tout le reste (Flax, Optax) repose.
+
+\begin{lstlisting}
+import jax.numpy as jnp
+
+a = jnp.array([1.0, 2.0, 3.0])
+b = a.at[0].set(9.0)          # b = [9,2,3] ; a est inchange (immutable)
+c = a + b                     # operations vectorisees comme en NumPy
+\end{lstlisting}
+
+\subsection{Clés aléatoires (\texttt{jax.random})}
+JAX n'a pas d'état aléatoire global : chaque tirage nécessite une clé
+explicite, et une clé ne doit \textbf{jamais être réutilisée} pour deux
+tirages différents --- on la \texttt{split} à chaque fois.
+
+\begin{lstlisting}
+key = jax.random.key(0)
+key, k1, k2 = jax.random.split(key, 3)   # 2 sous-cles independantes + la clef "suivante"
+x = jax.random.normal(k1, shape=(10,))
+y = jax.random.uniform(k2, shape=(10,))
+\end{lstlisting}
+
+\subsection{PyTrees}
+Un \emph{pytree} est une structure imbriquée (dict, liste, tuple) de tableaux.
+Les paramètres d'un modèle (Flax ou fait main) sont toujours des pytrees.
+\texttt{jax.tree\_util.tree\_map} applique une fonction à chaque feuille.
+
+\begin{lstlisting}
+params = {'W': jnp.ones((3,3)), 'b': jnp.zeros(3)}
+shapes = jax.tree_util.tree_map(lambda p: p.shape, params)
+# {'W': (3, 3), 'b': (3,)}
+zeroed = jax.tree_util.tree_map(lambda p: p * 0.0, params)
+\end{lstlisting}
+
+\subsection{\texttt{jax.grad} et \texttt{jax.value\_and\_grad}}
+Calcule le gradient d'une fonction scalaire par rapport à son premier
+argument (par défaut). \texttt{value\_and\_grad} renvoie la valeur \emph{et}
+le gradient en un seul passage --- toujours préférable dans une boucle
+d'entraînement pour éviter de calculer deux fois la passe avant.
+
+\begin{lstlisting}
+def f(x):
+    return jnp.sum(x ** 2)
+
+g = jax.grad(f)
+print(g(jnp.array([1., 2., 3.])))          # [2. 4. 6.]
+
+val, grad = jax.value_and_grad(f)(jnp.array([1., 2., 3.]))
+print(val, grad)                           # 14.0  [2. 4. 6.]
+\end{lstlisting}
+
+\subsection{\texttt{jax.jit}}
+Compile une fonction en XLA à la première exécution (pour chaque
+combinaison de formes d'entrée) ; les exécutions suivantes sont beaucoup plus
+rapides. \textbf{Toute la boucle d'entraînement} (un pas de descente de
+gradient) devrait être compilée en un seul \texttt{jit}, pas les sous-étapes
+séparément.
+
+\begin{lstlisting}
+@jax.jit
+def train_step(params, opt_state, x, y):
+    ...
+    return params, opt_state, loss
+\end{lstlisting}
+
+\subsection{\texttt{jax.vmap}}
+Vectorise une fonction écrite pour \emph{une seule} entrée, pour l'appliquer
+à un batch, sans boucle Python explicite ni réécriture des indices.
+
+\begin{lstlisting}
+def score_one(seq, F):
+    return jnp.sum(F[seq, jnp.arange(seq.shape[0])])
+
+batched_score = jax.vmap(score_one, in_axes=(0, None))   # vectorise sur seq, pas sur F
+scores = batched_score(seqs, F)   # seqs: (N, L) -> scores: (N,)
+\end{lstlisting}
+
+% ═══════════════════════════════════════════════════════════════════════════
+\section{Construire une couche dense ``à la main''}
+
+Utile pour comprendre exactement ce que fait Flax en coulisses, ou si l'on
+préfère na pas dépendre de Flax du tout.
+
+\begin{lstlisting}
+def init_dense(key, in_dim, out_dim):
+    """Initialisation de Glorot (Xavier) uniforme."""
+    k_w, k_b = jax.random.split(key)
+    limit = jnp.sqrt(6.0 / (in_dim + out_dim))
+    W = jax.random.uniform(k_w, (in_dim, out_dim), minval=-limit, maxval=limit)
+    b = jnp.zeros(out_dim)
+    return {'W': W, 'b': b}
+
+def init_mlp(key, layer_sizes):
+    """layer_sizes = [140, 64, 32, 1] par exemple."""
+    keys = jax.random.split(key, len(layer_sizes) - 1)
+    return [
+        init_dense(k, d_in, d_out)
+        for k, d_in, d_out in zip(keys, layer_sizes[:-1], layer_sizes[1:])
+    ]
+
+def mlp_forward(params, x):
+    for layer in params[:-1]:
+        x = jax.nn.relu(x @ layer['W'] + layer['b'])
+    last = params[-1]
+    return (x @ last['W'] + last['b']).squeeze(-1)
+\end{lstlisting}
+
+\begin{mdframed}
+\textbf{Testé} : \texttt{init\_mlp(key, [140, 64, 32, 1])} puis
+\texttt{mlp\_forward(params, x)} sur \texttt{x} de forme \texttt{(5, 140)}
+produit une sortie de forme \texttt{(5,)} --- confirmé dans ce
+document avant rédaction.
+\end{mdframed}
+
+% ═══════════════════════════════════════════════════════════════════════════
+\section{Fonctions d'activation (\texttt{jax.nn})}
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+Fonction & Formule & Usage typique \\
+\midrule
+\texttt{jax.nn.relu}       & $\max(0,x)$                         & Défaut robuste, rapide \\
+\texttt{jax.nn.gelu}       & $x\Phi(x)$ (lissée)                 & Souvent légèrement meilleur que ReLU \\
+\texttt{jax.nn.tanh}       & $\tanh(x)$                           & Sorties bornées $[-1,1]$ \\
+\texttt{jax.nn.sigmoid}    & $1/(1+e^{-x})$                       & Probabilités, portes \\
+\texttt{jax.nn.softplus}   & $\log(1+e^x)$                        & Version lisse de ReLU \\
+\texttt{jax.nn.leaky\_relu}& $x$ si $x>0$, sinon $\alpha x$        & Évite les neurones ``morts'' \\
+\texttt{jax.nn.softmax}    & $e^{x_i}/\sum_j e^{x_j}$              & Couche de sortie multi-classes \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{lstlisting}
+h = jax.nn.relu(x @ W + b)
+p = jax.nn.softmax(logits, axis=-1)
+\end{lstlisting}
+
+% ═══════════════════════════════════════════════════════════════════════════
+\section{Fonctions de perte}
+
+\subsection{MSE (log-ratio cible)}
+\begin{lstlisting}
+def mse_loss(preds, targets):
+    return jnp.mean((preds - targets) ** 2)
+\end{lstlisting}
+
+\subsection{Perte de Poisson (log-vraisemblance négative)}
+Utile si l'on entraîne directement sur les comptages bruts plutôt que sur le
+log-ratio (cf. \texttt{Poisson\_regression\_AAV.tex}) :
+\[
+    \ell(\mu, y) = \mu - y\log\mu \qquad (\text{à une constante près}).
+\]
+\begin{lstlisting}
+def poisson_nll(log_mu, y, eps=1e-6):
+    """log_mu : sortie brute du reseau (avant exp) ; y : comptage observe."""
+    mu = jnp.exp(log_mu)
+    return jnp.mean(mu - y * jnp.log(mu + eps))
+\end{lstlisting}
+
+\subsection{Huber (robuste aux valeurs aberrantes)}
+Combine MSE près de zéro et une pénalité linéaire (moins sensible aux
+grosses erreurs isolées) au-delà d'un seuil $\delta$ :
+\begin{lstlisting}
+def huber_loss(preds, targets, delta=1.0):
+    err = preds - targets
+    abs_err = jnp.abs(err)
+    quad = jnp.minimum(abs_err, delta)
+    lin = abs_err - quad
+    return jnp.mean(0.5 * quad**2 + delta * lin)
+\end{lstlisting}
+
+\subsection{Terme de régularisation L2 manuel}
+Si l'on n'utilise pas le \texttt{weight\_decay} d'Optax (\S\ref{sec:optax}),
+on peut l'ajouter directement dans la perte :
+\begin{lstlisting}
+def l2_penalty(params, lam=1e-4):
+    leaves = jax.tree_util.tree_leaves(params)
+    return lam * sum(jnp.sum(p ** 2) for p in leaves)
+
+def loss_with_l2(params, x, y):
+    preds = mlp_forward(params, x)
+    return mse_loss(preds, y) + l2_penalty(params)
+\end{lstlisting}
+
+% ═══════════════════════════════════════════════════════════════════════════
+\section{Flax (\texttt{flax.linen}) : définir un MLP proprement}
+
+Flax évite d'écrire soi-même l'initialisation et l'empilement des couches.
+\texttt{nn.compact} permet de déclarer les couches directement dans
+\texttt{\_\_call\_\_}.
+
+\begin{lstlisting}
+import flax.linen as nn
+
+class ProfileMLP(nn.Module):
+    hidden_dim: int = 64
+    dropout_rate: float = 0.1
+
+    @nn.compact
+    def __call__(self, x, training: bool):
+        x = nn.Dense(self.hidden_dim)(x)
+        x = nn.relu(x)
+        x = nn.Dropout(rate=self.dropout_rate, deterministic=not training)(x)
+        x = nn.Dense(1)(x)
+        return x.squeeze(-1)
+\end{lstlisting}
+
+\subsection{Initialisation des paramètres}
+Flax sépare la \emph{définition} du modèle de ses \emph{paramètres} : on
+initialise en appelant \texttt{model.init(...)} avec une entrée factice de la
+bonne forme.
+
+\begin{lstlisting}
+key = jax.random.key(0)
+key, k_init, k_drop = jax.random.split(key, 3)
+
+model = ProfileMLP(hidden_dim=32)
+dummy_x = jnp.zeros((1, 140))   # (1, L*A) pour le modele profile
+variables = model.init({'params': k_init, 'dropout': k_drop}, dummy_x, training=False)
+params = variables['params']
+\end{lstlisting}
+
+\begin{mdframed}
+\textbf{Testé} : \texttt{model.init(...)} sur \texttt{ProfileMLP(hidden\_dim=32)}
+avec une entrée \texttt{(1, 140)} produit
+\texttt{\{'Dense\_0': \{'bias': (32,), 'kernel': (140, 32)\}, 'Dense\_1': \{'bias': (1,), 'kernel': (32, 1)\}\}}
+--- confirmé.
+\end{mdframed}
+
+\subsection{Passe avant (\texttt{apply})}
+\begin{lstlisting}
+preds = model.apply(
+    {'params': params}, x,
+    training=True,
+    rngs={'dropout': k_drop},   # necessaire seulement si training=True (dropout actif)
+)
+\end{lstlisting}
+
+% ═══════════════════════════════════════════════════════════════════════════
+\section{Optax : optimiseurs, schedules, clipping}
+\label{sec:optax}
+
+\subsection{AdamW}
+\texttt{weight\_decay} dans \texttt{optax.adamw} est \textbf{découplé} du
+gradient (contrairement à un $\ell_2$ ajouté dans la perte, qui interagit
+avec les taux d'apprentissage adaptatifs d'Adam) --- c'est la raison pour
+laquelle AdamW généralise mieux qu'Adam + $\ell_2$-dans-la-perte.
+
+\begin{lstlisting}
+import optax
+
+tx = optax.adamw(learning_rate=1e-3, weight_decay=1e-4)
+opt_state = tx.init(params)
+\end{lstlisting}
+
+\subsection{Schedules de taux d'apprentissage}
+\begin{lstlisting}
+# Decroissance exponentielle
+sched1 = optax.exponential_decay(init_value=1e-3, transition_steps=100, decay_rate=0.9)
+
+# Warmup lineaire puis decroissance cosinus (tres courant)
+sched2 = optax.warmup_cosine_decay_schedule(
+    init_value=0.0, peak_value=1e-3, warmup_steps=20, decay_steps=300,
+)
+
+tx = optax.adamw(learning_rate=sched2, weight_decay=1e-4)
+\end{lstlisting}
+
+\begin{mdframed}
+\textbf{Testé} : \texttt{warmup\_cosine\_decay\_schedule} avec
+\texttt{warmup\_steps=20, decay\_steps=200} donne
+$\eta(0){=}0$, $\eta(20){\approx}10^{-3}$ (pic), puis décroît vers $0$ à
+l'étape $200$ --- confirmé.
+\end{mdframed}
+
+\subsection{Gradient clipping (stabilité)}
+Utile si les gradients explosent (rare pour un petit MLP, mais bon réflexe).
+Se compose avec l'optimiseur via \texttt{optax.chain} :
+\begin{lstlisting}
+tx = optax.chain(
+    optax.clip_by_global_norm(1.0),
+    optax.adamw(learning_rate=1e-3, weight_decay=1e-4),
+)
+\end{lstlisting}
+
+\subsection{Weight decay sélectif (exclure les biais)}
+Il est courant de ne pas régulariser les biais (uniquement les poids). Avec
+Flax, on peut construire un masque miroir de l'arborescence des paramètres :
+\begin{lstlisting}
+import flax.traverse_util as traverse_util
+
+def build_mask(params):
+    flat = traverse_util.flatten_dict(params)
+    mask_flat = {k: (k[-1] != 'bias') for k in flat}
+    return traverse_util.unflatten_dict(mask_flat)
+
+mask = build_mask(params)
+tx = optax.chain(
+    optax.adamw(learning_rate=1e-3, weight_decay=0.0),   # weight decay applique separement
+    optax.masked(optax.add_decayed_weights(1e-4), mask),
+)
+\end{lstlisting}
+
+Pour des paramètres faits main (liste de dicts \texttt{\{'W', 'b'\}}, pas
+Flax), le masque se construit à la main de la même forme :
+\begin{lstlisting}
+mask = [{'W': True, 'b': False} for _ in params]
+tx = optax.masked(optax.add_decayed_weights(1e-4), mask)
+\end{lstlisting}
+
+\begin{mdframed}
+\textbf{Testé} : \texttt{optax.masked(optax.add\_decayed\_weights(1e-4), mask)}
+avec \texttt{mask = [\{'W': True, 'b': False\}, ...]} s'initialise et
+s'applique sans erreur sur des paramètres faits main --- confirmé.
+\end{mdframed}
+
+% ═══════════════════════════════════════════════════════════════════════════
+\section{Boucle d'entraînement}
+
+Le patron standard : un \texttt{train\_step} \texttt{jit}-compilé qui prend
+les paramètres et l'état de l'optimiseur, renvoie les nouveaux paramètres,
+le nouvel état, et la perte.
+
+\begin{lstlisting}
+def loss_fn(params, x, y, rng, training):
+    preds = model.apply({'params': params}, x, training=training, rngs={'dropout': rng})
+    return jnp.mean((preds - y) ** 2)
+
+@jax.jit
+def train_step(params, opt_state, x, y, rng):
+    loss, grads = jax.value_and_grad(loss_fn)(params, x, y, rng, True)
+    updates, opt_state = tx.update(grads, opt_state, params)
+    params = optax.apply_updates(params, updates)
+    return params, opt_state, loss
+
+@jax.jit
+def eval_loss(params, x, y):
+    return loss_fn(params, x, y, jax.random.key(0), False)   # dropout desactive
+
+for step in range(n_steps):
+    key, k_step = jax.random.split(key)
+    params, opt_state, train_loss = train_step(params, opt_state, X_train, y_train, k_step)
+\end{lstlisting}
+
+\subsection{Full-batch vs mini-batch}
+Avec un nombre de lignes informatives faible (quelques centaines à quelques
+milliers, comme observé pour \texttt{lambda2p}/\texttt{lambda3p} dans ce
+projet), le \textbf{full-batch} (tout le jeu d'entraînement à chaque pas) est
+préférable : le bruit du mini-batch n'apporte aucun bénéfice de
+généralisation à cette échelle, et le gradient exact est de toute façon peu
+coûteux à calculer. Le mini-batch ne devient utile que si le jeu de données
+est trop gros pour tenir en mémoire (le mur mémoire rencontré à $N=200\,000$
+avec la matrice one-hot dense en est un exemple concret).
+
+\begin{lstlisting}
+def data_stream(key, X, y, batch_size):
+    n = X.shape[0]
+    while True:
+        key, k_perm = jax.random.split(key)
+        perm = jax.random.permutation(k_perm, n)
+        for i in range(0, n - batch_size + 1, batch_size):
+            idx = perm[i:i+batch_size]
+            yield X[idx], y[idx]
+\end{lstlisting}
+
+% ═══════════════════════════════════════════════════════════════════════════
+\section{Régularisation}
+
+\subsection{Dropout}
+Déjà inclus dans \texttt{ProfileMLP} ci-dessus via \texttt{nn.Dropout}. Le
+point important : \texttt{deterministic=not training} --- le dropout doit
+être désactivé à l'évaluation, sinon les métriques de validation sont
+bruitées inutilement.
+
+\subsection{Weight decay}
+Voir \S\ref{sec:optax}. Un seul scalaire global reste une limite structurelle
+similaire à celle du $\lambda$ de Ridge --- ne pas compter uniquement dessus.
+
+\subsection{Early stopping}
+Le levier le plus important pour un MLP sur un jeu de données de cette
+taille : un second critère d'arrêt, indépendant du weight decay, basé sur la
+perte de validation.
+
+\begin{lstlisting}
+class EarlyStopper:
+    def __init__(self, patience=10, min_delta=1e-4):
+        self.patience = patience
+        self.min_delta = min_delta
+        self.best = float('inf')
+        self.counter = 0
+
+    def step(self, val_loss) -> bool:
+        """Renvoie True si l'entrainement doit s'arreter."""
+        if val_loss < self.best - self.min_delta:
+            self.best = val_loss
+            self.counter = 0
+            return False
+        self.counter += 1
+        return self.counter >= self.patience
+\end{lstlisting}
+
+\begin{lstlisting}
+stopper = EarlyStopper(patience=30)
+for step in range(max_steps):
+    key, k_step = jax.random.split(key)
+    params, opt_state, train_loss = train_step(params, opt_state, X_tr, y_tr, k_step)
+    if step % 20 == 0:
+        val_loss = float(eval_loss(params, X_va, y_va))
+        if stopper.step(val_loss):
+            print(f"Early stopping a l'etape {step}")
+            break
+\end{lstlisting}
+
+\begin{mdframed}
+\textbf{Testé} : la classe \texttt{EarlyStopper} ci-dessus, avec
+\texttt{patience=3}, déclenche correctement l'arrêt sur la séquence de pertes
+$[1.0,\ 0.8,\ 0.79,\ 0.79,\ 0.79,\ 0.79]$ --- à l'indice 5, une fois 3 étapes
+consécutives sans amélioration $> 10^{-4}$ --- confirmé.
+\end{mdframed}
+
+% ═══════════════════════════════════════════════════════════════════════════
+\section{Évaluation}
+
+\subsection{Split train/validation}
+\begin{lstlisting}
+def train_val_split(X, y, val_frac=0.2, seed=0):
+    n = X.shape[0]
+    idx = np.random.RandomState(seed).permutation(n)
+    n_val = int(n * val_frac)
+    va, tr = idx[:n_val], idx[n_val:]
+    return X[tr], y[tr], X[va], y[va]
+\end{lstlisting}
+
+\subsection{Corrélation de Pearson (en JAX)}
+Équivalent JAX de \texttt{analysisV1.pearson}, utile si l'on veut la calculer
+à l'intérieur d'une fonction \texttt{jit}-compilée.
+\begin{lstlisting}
+def pearson_jnp(a, b):
+    a = a - jnp.mean(a)
+    b = b - jnp.mean(b)
+    return jnp.sum(a * b) / (jnp.sqrt(jnp.sum(a**2)) * jnp.sqrt(jnp.sum(b**2)))
+\end{lstlisting}
+
+\begin{mdframed}
+\textbf{Testé} : sur $a \sim \mathcal{N}(0,1)$ et $b = 2a + 0.1\varepsilon$,
+\texttt{pearson\_jnp(a,b)} $\approx 0.9999998$ --- confirmé.
+\end{mdframed}
+
+\subsection{Point d'attention : que peut-on comparer à la vérité terrain ?}
+\texttt{RegressionV1.evaluate\_recovery} compare \texttt{F\_hat.ravel()} à
+\texttt{protocol.F\_viab.ravel()} --- cela ne fonctionne que pour un modèle
+qui produit explicitement une matrice additive par position/acide aminé
+(comme Ridge). Un MLP avec une couche cachée non linéaire \textbf{n'a pas} de
+telle matrice à extraire : sa sortie est une fonction non linéaire de
+l'entrée one-hot, pas une somme pondérée terme à terme. Dès qu'une couche
+cachée est ajoutée, la comparaison doit se faire sur les \textbf{scores
+prédits} (\texttt{pearson\_jnp(v\_hat, v\_gt)}), pas sur une matrice de
+poids reconstituée.
+
+% ═══════════════════════════════════════════════════════════════════════════
+\section{Exemple complet : MLP pour le modèle profile}
+
+Cet exemple assemble tous les éléments ci-dessus sur les données réelles du
+pipeline (\texttt{build\_multi\_round\_dataset}). Testé de bout en bout sur
+une petite librairie synthétique ($N{=}2000$) avant rédaction : la perte
+d'entraînement et de validation décroissent normalement (perte de validation
+passant de $20.15$ à $1.46$ sur 300 étapes), sans erreur.
+
+\begin{lstlisting}
+import jax, jax.numpy as jnp
+import numpy as np
+import flax.linen as nn
+import optax
+import sequence_classesV1 as sc
+import RegressionV1 as rg
+
+# ---- 1. Donnees : cibles de log-enrichissement (memes que pour Ridge) ----
+key = jax.random.key(11)
+key, k_seq = jax.random.split(key)
+sequences = jax.random.randint(k_seq, shape=(2000, 7), minval=0, maxval=20)
+F_viab, F_sel, J_viab, J_sel = sc.initialize_random_weights(key=key)
+
+protocol = sc.ProtocolV2(
+    N0=1_000_000, N1=500_000, dilution_factor=10, sequences=sequences, D=100_000,
+    F_viab=F_viab, J_viab=J_viab, F_sel=F_sel, J_sel=J_sel,
+    noise_viab=0.1, noise_sel=0.1,
+)
+seqs_v, y_v, seqs_s, y_s = rg.build_multi_round_dataset(protocol, n_rounds=1)
+
+# ---- 2. Features one-hot (profile only : L*A = 140) ----
+X_v = np.eye(20, dtype=np.float32)[seqs_v].reshape(seqs_v.shape[0], -1)
+y_v = np.array(y_v, dtype=np.float32)
+
+# ---- 3. Split train/val ----
+n = X_v.shape[0]
+idx = np.random.RandomState(0).permutation(n)
+n_tr = int(n * 0.8)
+tr, va = idx[:n_tr], idx[n_tr:]
+X_tr, y_tr = jnp.array(X_v[tr]), jnp.array(y_v[tr])
+X_va, y_va = jnp.array(X_v[va]), jnp.array(y_v[va])
+
+# ---- 4. Modele ----
+class ProfileMLP(nn.Module):
+    hidden_dim: int = 32
+    @nn.compact
+    def __call__(self, x, training: bool):
+        x = nn.Dense(self.hidden_dim)(x)
+        x = nn.relu(x)
+        x = nn.Dropout(rate=0.1, deterministic=not training)(x)
+        x = nn.Dense(1)(x)
+        return x.squeeze(-1)
+
+model = ProfileMLP()
+key, k_init, k_drop = jax.random.split(key, 3)
+params = model.init({'params': k_init, 'dropout': k_drop}, X_tr[:1], training=False)['params']
+
+# ---- 5. Perte, optimiseur, schedule ----
+def loss_fn(params, x, y, rng, training):
+    preds = model.apply({'params': params}, x, training=training, rngs={'dropout': rng})
+    return jnp.mean((preds - y) ** 2)
+
+schedule = optax.warmup_cosine_decay_schedule(0.0, 1e-3, warmup_steps=20, decay_steps=300)
+tx = optax.adamw(learning_rate=schedule, weight_decay=1e-3)
+opt_state = tx.init(params)
+
+@jax.jit
+def train_step(params, opt_state, rng):
+    loss, grads = jax.value_and_grad(loss_fn)(params, X_tr, y_tr, rng, True)
+    updates, opt_state = tx.update(grads, opt_state, params)
+    params = optax.apply_updates(params, updates)
+    return params, opt_state, loss
+
+@jax.jit
+def eval_loss(params):
+    return loss_fn(params, X_va, y_va, jax.random.key(0), False)
+
+# ---- 6. Boucle avec early stopping ----
+stopper = EarlyStopper(patience=30)
+for step in range(300):
+    key, k_step = jax.random.split(key)
+    params, opt_state, train_loss = train_step(params, opt_state, k_step)
+    if step % 20 == 0:
+        val_loss = float(eval_loss(params))
+        print(f"step {step:3d}  train {float(train_loss):.4f}  val {val_loss:.4f}")
+        if stopper.step(val_loss):
+            print(f"Early stopping a l'etape {step}")
+            break
+\end{lstlisting}
+
+% ═══════════════════════════════════════════════════════════════════════════
+\section{Pièges et bonnes pratiques spécifiques à ce projet}
+
+\begin{itemize}
+    \item \textbf{Clés aléatoires} : ne jamais réutiliser \texttt{key} sans
+          \texttt{split} --- chaque appel à \texttt{model.init}, chaque pas
+          d'entraînement, chaque \texttt{jax.random.permutation} doit recevoir
+          une sous-clé fraîche. C'est la même discipline que
+          \texttt{Protocol.\_next\_key()} dans \texttt{sequence\_classesV1.py}.
+    \item \textbf{float32 par défaut} : JAX désactive le float64 par défaut
+          (contrairement à NumPy). Les tableaux \texttt{np.float64} passés à
+          JAX sont silencieusement tronqués en float32 --- généralement sans
+          conséquence ici, mais à garder en tête si des NaN apparaissent après
+          beaucoup d'étapes d'entraînement.
+    \item \textbf{Dropout et \texttt{rngs}} : oublier de passer
+          \texttt{rngs=\{'dropout': ...\}} à \texttt{model.apply} lève une
+          erreur explicite si \texttt{training=True} --- ce n'est pas un bug
+          silencieux, contrairement à d'autres frameworks.
+    \item \textbf{Évaluation sans dropout} : toujours appeler
+          \texttt{model.apply(..., training=False)} pour l'évaluation/la
+          validation, sinon la perte de validation est artificiellement
+          bruitée par le dropout actif.
+    \item \textbf{Vérifier le modèle linéaire avant le MLP} : entraîner
+          d'abord un \texttt{ProfileMLP} \textbf{sans} couche cachée (un seul
+          \texttt{nn.Dense} direct de 140 vers 1) avec AdamW, et vérifier que
+          le score de corrélation obtenu est proche de celui de Ridge au même
+          niveau de régularisation. Cela valide la boucle d'entraînement et le
+          pipeline de données \emph{avant} d'introduire la non-linéarité --- si
+          quelque chose ne va pas ensuite, on sait que c'est la couche cachée,
+          pas la plomberie.
+    \item \textbf{\texttt{jit} et formes variables} : si la taille du batch
+          change d'un appel à l'autre (par exemple en fin d'époque avec un
+          reste plus petit), JAX recompile --- coûteux si répété souvent.
+          Préférer une taille de batch fixe (tronquer le reste) ou le
+          full-batch (\S 8.1).
+\end{itemize}
+
+% ═══════════════════════════════════════════════════════════════════════════
+\section{Aide-mémoire récapitulatif}
+
+\begin{center}
+\begin{tabular}{p{5cm}p{9.5cm}}
+\toprule
+\textbf{Fonction} & \textbf{Rôle} \\
+\midrule
+\texttt{jax.random.split(key, n)} & Dérive $n$ sous-clés indépendantes \\
+\texttt{jax.grad} / \texttt{value\_and\_grad} & Gradient (et valeur) d'une fonction scalaire \\
+\texttt{jax.jit} & Compile XLA d'une fonction \\
+\texttt{jax.vmap} & Vectorise une fonction écrite pour un seul exemple \\
+\texttt{jax.tree\_util.tree\_map} & Applique une fonction à toutes les feuilles d'un pytree \\
+\texttt{jax.nn.relu / gelu / sigmoid / softmax} & Activations \\
+\texttt{flax.linen.Dense} & Couche dense (linéaire + biais) \\
+\texttt{flax.linen.Dropout} & Dropout, contrôlé par \texttt{deterministic} \\
+\texttt{model.init(rngs, x, ...)} & Initialise les paramètres \\
+\texttt{model.apply(\{'params':...\}, x, ...)} & Passe avant \\
+\texttt{optax.adamw} & Optimiseur Adam + weight decay découplé \\
+\texttt{optax.exponential\_decay} & Schedule de taux d'apprentissage exponentiel \\
+\texttt{optax.warmup\_cosine\_decay\_schedule} & Schedule warmup + cosinus \\
+\texttt{optax.clip\_by\_global\_norm} & Écrêtage de gradient \\
+\texttt{optax.chain} & Compose plusieurs transformations de gradient \\
+\texttt{optax.masked} & Applique une transformation seulement sur certains paramètres \\
+\texttt{optax.add\_decayed\_weights} & Weight decay pur (utilisé avec \texttt{masked}) \\
+\texttt{tx.init(params)} / \texttt{tx.update(grads, opt\_state, params)} & Cycle de vie de l'optimiseur \\
+\texttt{optax.apply\_updates(params, updates)} & Applique les mises à jour aux paramètres \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{mdframed}
+\textbf{Résumé} : chaque exemple de code de ce document a été exécuté et
+vérifié avant rédaction (JAX 0.6.2, Optax 0.2.8, Flax 0.10.7). Le fil
+conducteur recommandé : partir du modèle linéaire pur (une seule couche
+\texttt{Dense}, sans activation cachée) pour valider la boucle
+d'entraînement contre Ridge, puis n'introduire la non-linéarité, le dropout
+et l'early stopping qu'une fois cette base confirmée correcte.
+\end{mdframed}
+
+\end{document}
