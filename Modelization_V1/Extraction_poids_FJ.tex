@@ -1,0 +1,304 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath, amssymb}
+\usepackage{geometry}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{mdframed}
+\usepackage{listings}
+
+\geometry{margin=2.2cm}
+
+\hypersetup{colorlinks=true, linkcolor=blue!60!black, urlcolor=blue!60!black}
+
+\definecolor{codebg}{RGB}{247,247,247}
+\definecolor{codekw}{RGB}{0,90,180}
+\definecolor{codestr}{RGB}{170,60,0}
+\definecolor{codecom}{RGB}{100,100,100}
+
+\lstdefinestyle{py}{
+    language=Python,
+    backgroundcolor=\color{codebg},
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{codekw}\bfseries,
+    commentstyle=\color{codecom}\itshape,
+    stringstyle=\color{codestr},
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    stepnumber=1,
+    numbersep=8pt,
+    showstringspaces=false,
+    breaklines=true,
+    frame=single,
+    rulecolor=\color{gray!40},
+    tabsize=4,
+    xleftmargin=1.2em,
+}
+\lstset{style=py}
+
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\M}{\mathcal{M}}
+
+\title{\textbf{Récupération des poids $F$ et $J$ depuis \texttt{ProfileMLP}}\\
+\large Comment \texttt{extract\_effective\_FJ} retrouve un modèle de Potts à partir d'un
+réseau qui n'a jamais vu que des scores scalaires}
+\author{Institut de la Vision --- Directed Evolution Loop}
+\date{}
+
+\begin{document}
+\maketitle
+\tableofcontents
+\newpage
+
+% ═══════════════════════════════════════════════════════════════════════════
+\section{Le problème}
+
+\texttt{ProfileMLP} (\texttt{ProfileMLP\_recovery\_nnx.ipynb}) prend en entrée un vecteur
+one-hot mono-site $x \in \R^{L\cdot A}$ ($L=7$ positions, $A=20$ acides aminés) et ressort
+\textbf{un seul score scalaire} $\M(x)$ --- le log-ratio d'enrichissement prédit pour la
+séquence. C'est la seule chose qu'une vraie expérience NGS observe : jamais les 140 poids de
+profil ni les $21\times20\times20 = 8400$ couplages de paires directement.
+
+Le simulateur (\texttt{protocol.compute\_score}), lui, calcule ce score à partir d'un modèle
+de Potts complet :
+\[
+    \text{score}(s) = \sum_{p=0}^{L-1} F\big(s_p, p\big) \;+\; \sum_{0\le i<j\le L-1} J\big(i,j,s_i,s_j\big),
+\]
+où $F \in \R^{A\times L}$ sont les poids de profil (effet additif de chaque acide aminé à
+chaque position) et $J \in \R^{L\times L\times A\times A}$ les couplages de paires
+(épistasie). \texttt{ProfileMLP} est entraîné sur des cibles $y$ qui proviennent de \emph{ce}
+score complet ($F$ \emph{et} $J$), alors que ses features d'entrée ne contiennent que
+l'information mono-site. Le réseau ne peut donc capturer un effet de paire que si ses couches
+cachées combinent implicitement deux blocs one-hot actifs simultanément dans $x$ --- rien ne
+l'y oblige, mais rien ne l'en empêche non plus.
+
+La question de ce document : comment retrouver $\hat F$ et $\hat J$ à partir d'un modèle
+$\M$ qui ne sait faire qu'une chose, $x \mapsto \M(x) \in \R$, sans jamais toucher à ses poids
+internes (\texttt{linear1.kernel}, \texttt{batchnorm1}, \ldots) ?
+
+% ═══════════════════════════════════════════════════════════════════════════
+\section{Idée générale : sonder le réseau plutôt que lire ses poids}
+
+On ne lit \emph{jamais} les tenseurs de poids internes de \texttt{ProfileMLP}
+(\texttt{nnx.Linear.kernel}, etc.) : ces poids vivent dans l'espace des couches cachées, pas
+dans l'espace des 140 acides-aminés$\times$positions, et il n'y a pas de dictionnaire simple
+de l'un vers l'autre à travers deux couches de \texttt{BatchNorm} + \texttt{gelu} +
+\texttt{Dropout}. À la place, on traite $\M$ comme une boîte noire et on l'interroge à des
+entrées choisies exprès :
+
+\begin{itemize}
+    \item $x_0 = \mathbf 0$ --- séquence de référence, aucun bloc actif ;
+    \item $x_{p,a}$ --- un seul bloc actif : la position $p$ porte l'acide aminé $a$
+          (\emph{mutant simple}) ;
+    \item $x_{i,a,j,b}$ --- deux blocs actifs : position $i$ porte $a$, position $j$ porte $b$
+          (\emph{mutant double}).
+\end{itemize}
+
+C'est le même principe qu'un scan mutationnel en biologie expérimentale (deep mutational
+scanning) : on ne observe jamais les poids d'un système, seulement l'effet de mutations
+contrôlées sur sa sortie.
+
+\begin{mdframed}
+\textbf{Hypothèse implicite.} Cette méthode ne récupère un $\hat F,\hat J$ fidèle que si
+$\M$ se comporte, sur ces entrées éparses, comme une fonction additive-par-position plus une
+correction de paires --- exactement la structure que l'entraînement sur des features
+mono-site \emph{encourage}, sans la garantir. Un $x_{p,a}$ ou $x_{i,a,j,b}$ n'a par ailleurs
+que 1 ou 2 blocs actifs sur $L=7$, alors que \texttt{ProfileMLP} n'a jamais vu, à
+l'entraînement, que des séquences réelles avec exactement $L$ blocs actifs. On extrapole donc
+volontairement hors de la distribution d'entraînement.
+\end{mdframed}
+
+% ═══════════════════════════════════════════════════════════════════════════
+\section{Récupérer $F$ : balayage mono-mutant}
+
+Pour chaque position $p$ et chaque acide aminé $a$, on construit le mutant simple $x_{p,a}$ et
+on lit le score obtenu, comparé à la référence :
+\[
+    \hat F(a, p) \;=\; T \cdot \big(\M(x_{p,a}) - \M(x_0)\big),
+\]
+où $T$ est la température de la piste concernée (\texttt{protocol.\_T\_viab} ou
+\texttt{protocol.\_T\_sel}) --- le même facteur d'échelle que celui utilisé par
+\texttt{RegressionV1.fit\_weights\_potts} pour que $\hat F$ soit directement comparable à
+\texttt{protocol.F\_viab} / \texttt{protocol.F\_sel}.
+
+\textbf{Pourquoi ça marche.} Si $\M$ se décompose, sur ces entrées éparses, comme
+$\M(x) = c + \sum_p f_p(x_p)$ avec $f_p(0)=0$ (ce que le score de référence $c=\M(x_0)$ fixe
+naturellement), alors $\M(x_{p,a}) = c + f_p(a)$, donc $f_p(a) = \M(x_{p,a}) - c$ --- exactement
+la formule ci-dessus, à la constante $T$ près. $140 = L\cdot A$ passes avant suffisent (plus la
+référence).
+
+% ═══════════════════════════════════════════════════════════════════════════
+\section{Récupérer $J$ : balayage double-mutant}
+
+Même idée, un cran plus loin. Pour chaque paire de positions $i<j$ et chaque paire d'acides
+aminés $(a,b)$, on construit le mutant double $x_{i,a,j,b}$ (les deux blocs $(i,a)$ et $(j,b)$
+actifs à la fois, tout le reste à zéro) et on calcule le \textbf{résidu} au-delà de ce que les
+deux effets simples $(p,a)$ et $(j,b)$ expliquent déjà :
+\[
+    \Delta_{ij}(a,b) \;=\; \M(x_{i,a,j,b}) \;-\; \M(x_{i,a}) \;-\; \M(x_{j,b}) \;+\; \M(x_0),
+\]
+\[
+    \hat J(i,j,a,b) \;=\; \hat J(j,i,b,a) \;=\; T\cdot \Delta_{ij}(a,b).
+\]
+C'est la mesure d'épistasie classique par \emph{cycle mutationnel} (double-mutant cycle) :
+score du double mutant, moins ce que chaque mutation simple apporte déjà, moins la référence.
+Les deux entrées $\hat J(i,j,a,b)$ et $\hat J(j,i,b,a)$ sont remplies pour respecter la même
+convention de symétrie que \texttt{sequence\_classesV1.build\_J}, même si
+\texttt{protocol.compute\_score} ne relit ensuite que la moitié $i<j$ du tenseur.
+
+\textbf{Pourquoi ça marche.} En prolongeant l'hypothèse d'additivité de la section précédente
+avec un terme de paire, $\M(x) = c + \sum_p f_p(x_p) + \sum_{i<j} g_{ij}(x_i,x_j)$ avec
+$g_{ij}(0,\cdot)=g_{ij}(\cdot,0)=0$ :
+\[
+    \M(x_{i,a,j,b}) = c + f_i(a) + f_j(b) + g_{ij}(a,b)
+    \;\Longrightarrow\;
+    g_{ij}(a,b) = \M(x_{i,a,j,b}) - c - f_i(a) - f_j(b),
+\]
+et en remplaçant $f_i(a) = \M(x_{i,a})-c$, $f_j(b) = \M(x_{j,b})-c$, on retombe exactement sur
+$\Delta_{ij}(a,b)$ ci-dessus. \textbf{Cette identité est exacte}, pas approximative, dès lors
+que $\M$ a effectivement cette forme additive + paires sur les entrées éparses testées ---
+vérifié numériquement sur un modèle jouet synthétique reproduisant exactement cette structure
+(erreur de reconstruction $< 10^{-7}$, à la précision flottante près). Pour un vrai
+\texttt{ProfileMLP} entraîné, la question n'est pas si la formule est juste, mais si le réseau
+a effectivement appris une fonction de cette forme.
+
+% ═══════════════════════════════════════════════════════════════════════════
+\section{Le code (\texttt{extract\_effective\_FJ})}
+
+\begin{lstlisting}
+def extract_effective_FJ(model, T, L=L, A=A):
+    base = np.zeros((1, L * A), dtype=np.float32)
+
+    # 1. Mutants simples : L*A entrees, une par (position, acide amine)
+    single_mutants = np.tile(base, (L * A, 1))
+    for pos in range(L):
+        for aa in range(A):
+            single_mutants[pos * A + aa, pos * A + aa] = 1.0
+
+    # 2. Mutants doubles : un bloc de A*A lignes par paire (i, j), i<j
+    pairs   = [(i, j) for i in range(L) for j in range(i + 1, L)]
+    n_pairs = len(pairs)
+    double_mutants = np.tile(base, (n_pairs * A * A, 1))
+    for k, (i, j) in enumerate(pairs):
+        for aa_i in range(A):
+            for aa_j in range(A):
+                idx = k * (A * A) + aa_i * A + aa_j
+                double_mutants[idx, i * A + aa_i] = 1.0
+                double_mutants[idx, j * A + aa_j] = 1.0
+
+    # 3. Un seul forward pass pour tout le batch (reference + simples + doubles)
+    x = jnp.asarray(np.concatenate([base, single_mutants, double_mutants], axis=0))
+    scores = np.asarray(model(x, train=False))
+
+    base_score    = scores[0]
+    single_scores = scores[1 : 1 + L * A]
+    double_scores = scores[1 + L * A :]
+
+    # 4. F : delta simple, mis a l'echelle par T
+    F_flat = (single_scores - base_score).reshape(L, A)
+    F_hat  = (F_flat * T).T.astype(np.float32)  # (A, L)
+
+    # 5. J : residu du cycle mutationnel, mis a l'echelle par T, rempli symetriquement
+    J_hat = np.zeros((L, L, A, A), dtype=np.float32)
+    for k, (i, j) in enumerate(pairs):
+        for aa_i in range(A):
+            for aa_j in range(A):
+                idx      = k * (A * A) + aa_i * A + aa_j
+                delta_ij = (double_scores[idx] - base_score
+                            - (single_scores[i * A + aa_i] - base_score)
+                            - (single_scores[j * A + aa_j] - base_score))
+                J_hat[i, j, aa_i, aa_j] = delta_ij * T
+                J_hat[j, i, aa_j, aa_i] = delta_ij * T
+
+    return F_hat, J_hat
+
+F_viab_hat, J_viab_hat = extract_effective_FJ(model_viab, protocol._T_viab)
+F_sel_hat,  J_sel_hat  = extract_effective_FJ(model_sel,  protocol._T_sel)
+\end{lstlisting}
+
+Points d'implémentation à noter :
+\begin{itemize}
+    \item \textbf{Un seul \texttt{model(x, train=False)}} pour toutes les entrées (référence
+          + mutants simples + mutants doubles) : $1 + L\cdot A + \binom{L}{2}A^2$ lignes, soit
+          $1 + 140 + 21\times400 = 8541$ pour $L=7,A=20$. Un seul passage en mode
+          \texttt{train=False} désactive \texttt{Dropout} et fige \texttt{BatchNorm} en mode
+          évaluation, donc le score est déterministe pour un même $x$.
+    \item \texttt{scores = np.asarray(model(x, train=False))} rapatrie tout le tableau du GPU
+          vers le CPU \emph{une seule fois}, avant les boucles Python qui indexent
+          \texttt{single\_scores}/\texttt{double\_scores} --- sans ça, chaque itération de la
+          boucle sur $J$ (8400 itérations) déclencherait une synchronisation device$\to$host
+          individuelle.
+    \item \texttt{F\_hat} est transposé en \texttt{(A, L)} et \texttt{J\_hat} construit en
+          \texttt{(L, L, A, A)} pour matcher exactement la convention de
+          \texttt{RegressionV1}\allowbreak\texttt{.fit\_weights\_potts} et de
+          \texttt{sequence\_classesV1}\allowbreak\texttt{.initialize\_random\_weights} ---
+          \texttt{F\_hat} et \texttt{J\_hat} sont directement comparables à
+          \texttt{protocol.F\_viab} et \texttt{protocol.J\_viab} sans transformation
+          supplémentaire.
+\end{itemize}
+
+% ═══════════════════════════════════════════════════════════════════════════
+\section{Vérifier la récupération}
+
+\texttt{evaluate\_profile\_recovery} compare $\hat F,\hat J$ à la vérité terrain de deux façons
+complémentaires :
+
+\begin{enumerate}
+    \item \textbf{Corrélation au niveau des poids} : \texttt{pearson} entre
+          \texttt{protocol}\allowbreak\texttt{.F\_viab.ravel()} et
+          \texttt{F\_viab\_hat}\allowbreak\texttt{.ravel()} (et pareil pour $J$) --- est-ce que
+          chaque coefficient individuel est bien retrouvé ?
+    \item \textbf{Corrélation au niveau des scores} : on repasse $\hat F,\hat J$ dans
+          \texttt{protocol.compute\_score} (la même fonction que le simulateur utilise pour
+          générer les vraies données) et on compare aux scores calculés avec les vrais
+          \texttt{F\_viab}/\texttt{J\_viab}. Cette deuxième vue est plus indulgente aux
+          ambiguïtés de symétrie/constante d'un cycle mutationnel : deux tenseurs $J$
+          différents peuvent donner le même score total si leurs différences s'annulent
+          systématiquement sur les séquences réelles.
+\end{enumerate}
+
+\begin{lstlisting}
+v_hat = np.array(protocol.compute_score(F_viab_hat, J_viab_hat))
+v_gt  = np.array(protocol.compute_score(protocol.F_viab, protocol.J_viab))
+r_viab_scores = pearson(v_gt, v_hat)
+\end{lstlisting}
+
+% ═══════════════════════════════════════════════════════════════════════════
+\section{Limites}
+
+\begin{itemize}
+    \item \textbf{Hors distribution.} Les entrées sondées (1 ou 2 blocs actifs sur $L=7$)
+          ne ressemblent à aucune séquence vue à l'entraînement (toujours $L$ blocs actifs).
+          \texttt{BatchNorm} en particulier a été calibré sur des statistiques de séquences
+          complètes ; son comportement sur un $x$ quasi-nul est une extrapolation, pas une
+          interpolation.
+    \item \textbf{Ambiguïté de symétrie/constante.} Le cycle mutationnel identifie $J$ à une
+          transformation additive près qui laisse les scores de doubles mutants inchangés
+          (typiquement : déplacer une constante entre $F$ et $J$). $\hat J$ peut donc différer
+          de $J_{\text{vrai}}$ terme à terme tout en produisant les mêmes scores --- d'où
+          l'intérêt de comparer aussi au niveau des scores (section précédente), pas seulement
+          coefficient par coefficient.
+    \item \textbf{Coût combinatoire.} Le nombre de mutants doubles croît en $\binom{L}{2}A^2$ :
+          gérable pour $L=7,A=20$ (8400 lignes), mais pas extensible tel quel à des séquences
+          beaucoup plus longues sans sous-échantillonnage des paires.
+\end{itemize}
+
+% ═══════════════════════════════════════════════════════════════════════════
+\section{Résumé}
+
+\begin{mdframed}
+\texttt{extract\_effective\_FJ} ne lit jamais les poids internes de \texttt{ProfileMLP} : il
+sonde le réseau à des entrées choisies (référence nulle, mutants simples, mutants doubles) et
+lit les \emph{différences de score} qui en résultent. Un delta simple $\M(x_{p,a})-\M(x_0)$
+recouvre l'effet de profil $\hat F(a,p)$ ; un résidu de cycle mutationnel
+$\M(x_{i,a,j,b}) - \M(x_{i,a}) - \M(x_{j,b}) + \M(x_0)$ recouvre le couplage de paire
+$\hat J(i,j,a,b)$. Les deux sont mis à l'échelle par la température $T$ de la piste
+(viabilité ou sélectivité) et rangés dans les mêmes conventions de forme que
+\texttt{RegressionV1}, pour être directement comparables --- coefficient par coefficient ou
+via \texttt{protocol.compute\_score} --- à la vérité terrain $F,J$ du simulateur.
+\end{mdframed}
+
+\end{document}
