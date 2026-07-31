@@ -43,7 +43,7 @@ from tqdm.auto import tqdm
 from sequence_classesV1 import *
 from analysisV1 import pearson, precision_at_k
 
-message = "file regression 1.3"
+message = "file regression 1.4"
 
 L = 7   # num_positions, matches Protocol.compute_score's hardcoded range(7)
 A = 20  # num_amino_acids
@@ -163,6 +163,29 @@ def ridge_cv_mse_potts(X, y, lambdas, kf, desc="Ridge CV"):
     return mse / kf.get_n_splits()
 
 
+def _unpack_potts_weights(w, T, L=L, A=A):
+    """
+    Shared by fit_weights_potts and fit_weights_potts_unregularized: splits a
+    flat weight vector -- laid out as [single-site | pairwise | bias], the
+    same column order build_potts_features produces -- into (F_hat, J_hat)
+    tensors rescaled by temperature T.
+    """
+    F_flat = w[:L * A].reshape(L, A)
+    F_hat  = (F_flat).T  # -> (A, L)
+
+    n_pairs = L * (L - 1) // 2
+    J_flat  = w[L * A : L * A + n_pairs * A * A].reshape(n_pairs, A, A)
+    J_hat   = np.zeros((L, L, A, A))
+    k = 0
+    for i in range(L):
+        for j in range(i + 1, L):
+            J_hat[i, j] = J_flat[k]
+            J_hat[j, i] = J_flat[k].T
+            k += 1
+
+    return jnp.array(F_hat), jnp.array(J_hat)
+
+
 def fit_weights_potts(X, y, T, L=L, A=A, lam=1.0):
     """
     Ridge fit of the pooled log-ratio targets, then unpack the flat weight
@@ -172,21 +195,30 @@ def fit_weights_potts(X, y, T, L=L, A=A, lam=1.0):
     G = X.T @ X
     G[np.arange(n_feat - 1), np.arange(n_feat - 1)] += lam
     w = np.linalg.solve(G, X.T @ y)
+    return _unpack_potts_weights(w, T, L=L, A=A)
 
-    F_flat = w[:L * A].reshape(L, A)
-    F_hat  = (F_flat * T).T  # -> (A, L)
 
-    n_pairs = L * (L - 1) // 2
-    J_flat  = w[L * A : L * A + n_pairs * A * A].reshape(n_pairs, A, A)
-    J_hat   = np.zeros((L, L, A, A))
-    k = 0
-    for i in range(L):
-        for j in range(i + 1, L):
-            J_hat[i, j] = J_flat[k] * T
-            J_hat[j, i] = J_flat[k].T * T
-            k += 1
+def fit_weights_potts_unregularized(X, y, T, L=L, A=A):
+    """
+    Ordinary least squares (no L2 penalty) fit of the pooled log-ratio
+    targets, then unpack the flat weight vector back into (F_hat, J_hat)
+    tensors rescaled by temperature T.
 
-    return jnp.array(F_hat), jnp.array(J_hat)
+    Uses np.linalg.lstsq (SVD-based pseudoinverse) rather than solving the
+    normal equations directly: with 8541 Potts features, X is routinely
+    p >> n (rank-deficient X^T X), and np.linalg.solve on a singular/near-
+    singular G is exactly the blowup fit_weights_potts's lam floor exists to
+    avoid. lstsq instead returns the minimum-norm least-squares solution,
+    which is well-defined even when X^T X is singular.
+
+    Returns
+    -------
+    F_hat, J_hat, rank : recovered tensors plus the numerical rank of X
+        (rank < X.shape[1] flags a rank-deficient / non-unique OLS fit).
+    """
+    w, _residuals, rank, _sv = np.linalg.lstsq(X, y, rcond=None)
+    F_hat, J_hat = _unpack_potts_weights(w, T, L=L, A=A)
+    return F_hat, J_hat, rank
 
 
 ### ---------------------------- End-to-end pipeline --------------------------- ###
@@ -252,6 +284,53 @@ def recover_weights_from_NGS(protocol, n_rounds=5, lambdas_grid=None, k_folds=5,
         cv_mse_viab=cv_viab, cv_mse_sel=cv_sel,
         lambdas_grid=lambdas_grid,
         n_obs_viab=X_viab.shape[0], n_obs_sel=X_sel.shape[0],
+    )
+    return F_viab_hat, J_viab_hat, F_sel_hat, J_sel_hat, info
+
+
+def recover_weights_unregularized_from_NGS(protocol, n_rounds=5, eps=0.5, verbose=True):
+    """
+    Same end-to-end pipeline as recover_weights_from_NGS (builds the pooled
+    NGS dataset, then fits F_viab/J_viab and F_sel/J_sel), but with ordinary
+    least squares instead of Ridge: no L2 penalty, so no lambda grid / CV
+    step either. Useful as a no-regularization baseline against
+    recover_weights_from_NGS, especially to see what the ridge penalty buys
+    once the dataset is small relative to the 8541 Potts features (p >> n).
+
+    Returns
+    -------
+    F_viab_hat, J_viab_hat, F_sel_hat, J_sel_hat, info
+        info : dict with dataset sizes and the numerical rank of each design
+        matrix (rank < n_features flags a rank-deficient / non-unique fit).
+    """
+    if verbose:
+        print(f"JAX backend: {jax.default_backend()} -- devices: {jax.devices()}")
+
+    seqs_viab, y_viab, seqs_sel, y_sel = build_multi_round_dataset(protocol, n_rounds, eps=eps)
+
+    if verbose:
+        print(f"Viability   dataset: {seqs_viab.shape[0]} observed (sequence, round) pairs over {n_rounds} rounds")
+        print(f"Selectivity dataset: {seqs_sel.shape[0]} observed (sequence, round) pairs over {n_rounds} rounds")
+
+    X_viab = build_potts_features(seqs_viab)
+    X_sel  = build_potts_features(seqs_sel)
+    print("Just finished building the Potts features")
+
+    F_viab_hat, J_viab_hat, rank_viab = fit_weights_potts_unregularized(X_viab, y_viab, protocol._T_viab)
+    F_sel_hat,  J_sel_hat,  rank_sel  = fit_weights_potts_unregularized(X_sel,  y_sel,  protocol._T_sel)
+
+    if verbose:
+        print(f"Viability   design matrix rank: {rank_viab} / {X_viab.shape[1]} features ({X_viab.shape[0]} obs)")
+        print(f"Selectivity design matrix rank: {rank_sel} / {X_sel.shape[1]} features ({X_sel.shape[0]} obs)")
+        for name, rank, X in (("viability", rank_viab, X_viab), ("selectivity", rank_sel, X_sel)):
+            if rank < X.shape[1]:
+                print(f"  WARNING: {name} design matrix is rank-deficient (p > n) -- lstsq returns "
+                      f"the minimum-norm solution, not a unique OLS estimate.")
+
+    info = dict(
+        n_obs_viab=X_viab.shape[0], n_obs_sel=X_sel.shape[0],
+        n_features=X_viab.shape[1],
+        rank_viab=rank_viab, rank_sel=rank_sel,
     )
     return F_viab_hat, J_viab_hat, F_sel_hat, J_sel_hat, info
 

@@ -11,29 +11,33 @@
 #   V1 scope: PROFILE model only (F), single-site one-hot features -- no pairwise   #
 #   (J) terms yet. The Potts (F + J) version is a later step (see README.md).       #
 #                                                                                   #
+#   Flax/Optax port: replaces the earlier PyTorch ProfileMLP with a flax.linen      #
+#   Module trained through optax (same pattern as MLP_regV1.py), so this file and   #
+#   RegressionV1.py's Ridge solve share one array library (jax) instead of mixing   #
+#   torch + jax in the same process. BatchNorm was dropped in the port -- flax's    #
+#   nn.BatchNorm needs a second mutable ("batch_stats") collection threaded through #
+#   every train/eval call, which the minimal MLP_regV1.py pattern this follows      #
+#   doesn't do; dropout + AdamW weight decay are the regularizers instead.          #
+#                                                                                   #
 #####################################################################################
 #####################################################################################
 #####################################################################################
 
 import numpy as np
-import torch
-import torch.nn as nn
+import jax
+import jax.numpy as jnp
+import flax.linen as nn
+import optax
 from tqdm.auto import tqdm
 
 from sequence_classesV1 import *
 from analysisV1 import pearson, precision_at_k
 from RegressionV1 import build_multi_round_dataset
 
-message = "file MLP regression 1.0"
+message = "file MLP regression 2.0 (flax/optax)"
 
 L = 7   # num_positions, matches Protocol.compute_score's hardcoded range(7)
 A = 20  # num_amino_acids
-
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-if DEVICE.type == "cuda":
-    # fp32 matmuls (e.g. BatchNorm running-stat updates) run at TF32 instead of full
-    # precision -- irrelevant to accuracy here, free throughput on the GB10's tensor cores
-    torch.set_float32_matmul_precision("high")
 
 
 ### ---------------------------- Feature construction --------------------------- ###
@@ -62,10 +66,6 @@ def build_profile_features(seqs_obs, A=A):
     return oh.reshape(N, Lseq * A)               # (N, L*A)
 
 
-def _to_device_f32(x, device):
-    return torch.as_tensor(np.asarray(x, dtype=np.float32), device=device)
-
-
 ### ---------------------------- Model --------------------------- ###
 #######################################################################################
 
@@ -76,18 +76,17 @@ class ProfileMLP(nn.Module):
     (which collapses toward near-zero weights once the feature count balloons, see
     file header) with a network trained by SGD.
     """
+    hidden_dims: tuple = (256, 128, 64)
+    dropout: float = 0.1
 
-    def __init__(self, input_dim=L * A, hidden_dims=(256, 128, 64), dropout=0.1):
-        super().__init__()
-        dims = [input_dim, *hidden_dims]
-        layers = []
-        for d_in, d_out in zip(dims[:-1], dims[1:]):
-            layers += [nn.Linear(d_in, d_out), nn.BatchNorm1d(d_out), nn.ReLU(), nn.Dropout(dropout)]
-        layers.append(nn.Linear(dims[-1], 1))
-        self.net = nn.Sequential(*layers)
-
-    def forward(self, x):
-        return self.net(x).squeeze(-1)
+    @nn.compact
+    def __call__(self, x, training: bool):
+        for h in self.hidden_dims:
+            x = nn.Dense(h)(x)
+            x = nn.relu(x)
+            x = nn.Dropout(rate=self.dropout, deterministic=not training)(x)
+        x = nn.Dense(1)(x)
+        return x.squeeze(-1)
 
 
 ### ---------------------------- Training --------------------------- ###
@@ -95,65 +94,81 @@ class ProfileMLP(nn.Module):
 
 def train_profile_mlp(X_train, y_train, X_val, y_val, hidden_dims=(256, 128, 64),
                        dropout=0.1, epochs=300, batch_size=4096, lr=1e-3,
-                       weight_decay=1e-4, patience=20, device=DEVICE, seed=0, verbose=True):
+                       weight_decay=1e-4, patience=20, seed=0, verbose=True):
     """
     GPU-resident training: the whole profile dataset (N x L*A floats -- a few
     hundred MB even at DE_loopV1.ipynb's largest library, 800k sequences) fits
-    comfortably in a DGX Spark's unified memory, so X/y are moved to `device` ONCE
-    and every epoch's minibatches are carved out with a GPU-side torch.randperm --
-    no DataLoader / per-step host<->device copy, which is where a conventional
-    discrete-GPU training loop spends most of its time on a model this small.
-    Mixed precision uses bf16 (Blackwell's native compute dtype, no GradScaler
-    needed the way fp16 requires).
+    comfortably in a DGX Spark's unified memory, so X/y are moved to jax arrays
+    ONCE and every epoch's minibatches are carved out with a freshly split PRNG
+    key permutation -- no DataLoader / per-step host round-trip. `train_step` is
+    jax.jit-compiled once per distinct batch shape (at most twice per call: the
+    full batch_size and one shorter tail batch), not retraced every step.
 
     Returns
     -------
-    model   : the ProfileMLP with the best-val-MSE weights loaded
+    state   : dict with the best-val-MSE params plus the architecture args needed
+              to rebuild the model for predict_scores (flax has no state_dict, so
+              this dict is the closest equivalent).
     history : dict with "train_loss" / "val_loss" per epoch
     """
-    torch.manual_seed(seed)
-    model = ProfileMLP(input_dim=X_train.shape[1], hidden_dims=hidden_dims, dropout=dropout).to(device)
-    opt   = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
-    sched = torch.optim.lr_scheduler.ReduceLROnPlateau(opt, factor=0.5, patience=max(patience // 3, 1))
-    loss_fn = nn.MSELoss()
+    key = jax.random.key(seed)
+    key, k_init, k_drop = jax.random.split(key, 3)
 
-    Xtr, ytr = _to_device_f32(X_train, device), _to_device_f32(y_train, device)
-    Xva, yva = _to_device_f32(X_val, device),   _to_device_f32(y_val, device)
-    n_train  = Xtr.shape[0]
-    use_amp  = device.type == "cuda"
+    model = ProfileMLP(hidden_dims=hidden_dims, dropout=dropout)
+    X_train = jnp.asarray(X_train, dtype=jnp.float32)
+    y_train = jnp.asarray(y_train, dtype=jnp.float32)
+    X_val   = jnp.asarray(X_val,   dtype=jnp.float32)
+    y_val   = jnp.asarray(y_val,   dtype=jnp.float32)
 
-    best_val, best_state, bad_epochs = float("inf"), None, 0
+    params = model.init({'params': k_init, 'dropout': k_drop}, X_train[:1], training=False)['params']
+
+    n_train         = X_train.shape[0]
+    steps_per_epoch = max(n_train // batch_size, 1)
+    total_steps     = steps_per_epoch * epochs
+    warmup_steps    = max(total_steps // 15, 1)
+
+    schedule = optax.warmup_cosine_decay_schedule(0.0, lr, warmup_steps=warmup_steps, decay_steps=total_steps)
+    tx       = optax.adamw(learning_rate=schedule, weight_decay=weight_decay)
+    opt_state = tx.init(params)
+
+    def loss_fn(params, x, y, rng, training):
+        preds = model.apply({'params': params}, x, training=training, rngs={'dropout': rng})
+        return jnp.mean((preds - y) ** 2)
+
+    @jax.jit
+    def train_step(params, opt_state, xb, yb, rng):
+        loss, grads = jax.value_and_grad(loss_fn)(params, xb, yb, rng, True)
+        updates, opt_state = tx.update(grads, opt_state, params)
+        params = optax.apply_updates(params, updates)
+        return params, opt_state, loss
+
+    @jax.jit
+    def eval_loss(params, x, y):
+        return loss_fn(params, x, y, jax.random.key(0), False)
+
+    best_val, best_params, bad_epochs = float("inf"), params, 0
     history = {"train_loss": [], "val_loss": []}
 
     for epoch in tqdm(range(epochs), desc="Training ProfileMLP", disable=not verbose):
-        model.train()
-        perm = torch.randperm(n_train, device=device)
+        key, k_perm = jax.random.split(key)
+        perm = jax.random.permutation(k_perm, n_train)
         running, seen = 0.0, 0
         for start in range(0, n_train, batch_size):
             idx = perm[start:start + batch_size]
-            if idx.numel() < 2:  # BatchNorm1d needs >1 sample in train mode
-                continue
-            xb, yb = Xtr[idx], ytr[idx]
-            opt.zero_grad(set_to_none=True)
-            with torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=use_amp):
-                loss = loss_fn(model(xb), yb)
-            loss.backward()
-            opt.step()
-            running += loss.item() * idx.numel()
-            seen    += idx.numel()
+            key, k_step = jax.random.split(key)
+            xb, yb = X_train[idx], y_train[idx]
+            params, opt_state, loss = train_step(params, opt_state, xb, yb, k_step)
+            running += float(loss) * idx.shape[0]
+            seen    += idx.shape[0]
         train_loss = running / seen
 
-        model.eval()
-        with torch.no_grad(), torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=use_amp):
-            val_loss = loss_fn(model(Xva), yva).item()
-        sched.step(val_loss)
-
+        val_loss = float(eval_loss(params, X_val, y_val))
         history["train_loss"].append(train_loss)
         history["val_loss"].append(val_loss)
 
         if val_loss < best_val - 1e-6:
             best_val, bad_epochs = val_loss, 0
-            best_state = {k: v.detach().clone() for k, v in model.state_dict().items()}
+            best_params = params
         else:
             bad_epochs += 1
             if bad_epochs >= patience:
@@ -161,22 +176,19 @@ def train_profile_mlp(X_train, y_train, X_val, y_val, hidden_dims=(256, 128, 64)
                     print(f"Early stopping at epoch {epoch} (best val MSE={best_val:.4f})")
                 break
 
-    model.load_state_dict(best_state)
-    return model, history
+    state = dict(params=best_params, hidden_dims=hidden_dims, dropout=dropout)
+    return state, history
 
 
-@torch.no_grad()
-def predict_scores(model, X, device=DEVICE):
+def predict_scores(state, X):
     """Forward pass over the full X in one shot (profile features are only L*A wide)."""
-    model.eval()
-    Xt = _to_device_f32(X, device)
-    with torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=(device.type == "cuda")):
-        pred = model(Xt)
-    return pred.float().cpu().numpy()
+    model = ProfileMLP(hidden_dims=state["hidden_dims"], dropout=state["dropout"])
+    X = jnp.asarray(X, dtype=jnp.float32)
+    preds = model.apply({'params': state["params"]}, X, training=False)
+    return np.array(preds)
 
 
-@torch.no_grad()
-def extract_effective_F(model, T, L=L, A=A, device=DEVICE):
+def extract_effective_F(state, T, L=L, A=A):
     """
     Single-mutant scan from an all-zero reference sequence: for every (position,
     amino acid), predict the score of a sequence with only that position set to
@@ -193,7 +205,7 @@ def extract_effective_F(model, T, L=L, A=A, device=DEVICE):
         for aa in range(A):
             mutants[pos * A + aa, pos * A + aa] = 1.0
 
-    scores     = predict_scores(model, np.concatenate([base, mutants], axis=0), device=device)
+    scores     = predict_scores(state, np.concatenate([base, mutants], axis=0))
     base_score = scores[0]
     F_flat     = (scores[1:] - base_score).reshape(L, A)
     return jnp.array((F_flat * T).T)  # (A, L), matches fit_weights_potts' F_hat layout
@@ -214,13 +226,12 @@ def recover_profile_from_NGS(protocol, n_rounds=5, val_frac=0.15, eps=0.5, seed=
     Returns
     -------
     F_viab_hat, F_sel_hat, info
-        info : dict with the trained models, loss histories, and dataset sizes
+        info : dict with the trained model states, loss histories, and dataset sizes
     """
     mlp_kwargs = mlp_kwargs or {}
 
     if verbose:
-        gpu_name = torch.cuda.get_device_name(0) if DEVICE.type == "cuda" else "CPU"
-        print(f"torch device: {DEVICE} ({gpu_name})")
+        print(f"JAX backend: {jax.default_backend()} -- devices: {jax.devices()}")
 
     seqs_viab, y_viab, seqs_sel, y_sel = build_multi_round_dataset(protocol, n_rounds, eps=eps)
 
@@ -240,14 +251,14 @@ def recover_profile_from_NGS(protocol, n_rounds=5, val_frac=0.15, eps=0.5, seed=
         print(f"Viability   dataset: {seqs_viab.shape[0]} pairs -> {len(Xtr_v)} train / {len(Xva_v)} val")
         print(f"Selectivity dataset: {seqs_sel.shape[0]} pairs -> {len(Xtr_s)} train / {len(Xva_s)} val")
 
-    model_viab, hist_viab = train_profile_mlp(Xtr_v, ytr_v, Xva_v, yva_v, seed=seed, verbose=verbose, **mlp_kwargs)
-    model_sel,  hist_sel  = train_profile_mlp(Xtr_s, ytr_s, Xva_s, yva_s, seed=seed, verbose=verbose, **mlp_kwargs)
+    state_viab, hist_viab = train_profile_mlp(Xtr_v, ytr_v, Xva_v, yva_v, seed=seed, verbose=verbose, **mlp_kwargs)
+    state_sel,  hist_sel  = train_profile_mlp(Xtr_s, ytr_s, Xva_s, yva_s, seed=seed, verbose=verbose, **mlp_kwargs)
 
-    F_viab_hat = extract_effective_F(model_viab, protocol._T_viab)
-    F_sel_hat  = extract_effective_F(model_sel,  protocol._T_sel)
+    F_viab_hat = extract_effective_F(state_viab, protocol._T_viab)
+    F_sel_hat  = extract_effective_F(state_sel,  protocol._T_sel)
 
     info = dict(
-        model_viab=model_viab, model_sel=model_sel,
+        model_viab=state_viab, model_sel=state_sel,
         history_viab=hist_viab, history_sel=hist_sel,
         n_obs_viab=Xtr_v.shape[0] + Xva_v.shape[0],
         n_obs_sel=Xtr_s.shape[0] + Xva_s.shape[0],
