@@ -279,7 +279,7 @@ class Protocol():
         self.lambda2 = jax.random.poisson(self._next_key(), total_rate).astype(jnp.float32)
         return self.lambda2
     
-    def selectivty(self) -> jax.Array:
+    def selectivity(self) -> jax.Array:
         """ 
         Selectivity (retention) step: enrich the capsid pool by its noisy selectivity score
 
@@ -334,7 +334,7 @@ class Protocol():
         self.lambda1  = self.initial_sampling()
         self.lambda2  = self.produce_capsids()
         self.lambda2p = self.NGS(self.lambda2)
-        self.lambda3  = self.selectivty()
+        self.lambda3  = self.selectivity()
         self.lambda3p = self.NGS(self.lambda3)
         self.lambda4  = self.bacterial_amplification()
         return [[self.lambda0, self.lambda1, self.lambda2, self.lambda3, self.lambda4], [self.lambda0p, self.lambda2p, self.lambda3p]]
@@ -410,7 +410,7 @@ class ProtocolBacterialCFU(Protocol):
 
 class ProtocolV2(ProtocolBacterialCFU):
     
-    def selectivty(self) -> jax.Array:
+    def selectivity(self) -> jax.Array:
         """
         Binomial retention: lambda3(s) ~ Binomial(n=lambda2(s), p=p_s), which
         guarantees lambda3(s) <= lambda2(s) by construction (no per-cell padded
@@ -446,24 +446,30 @@ def build_J(interactions):
         J[j, i, b, a] += v
     return jnp.array(J)
 
-def initialize_random_weights(key):
-    """ 
+def initialize_random_weights(key, sparsity_J=0.0):
+    """
     Initialize random weights according a given jax key
     F_v = profile weights for viability
     F_s = profile weights for selectivity
     J_v = Pott's weights for viability
     J_s = Pott's weights for viability
+
+    sparsity_J : fraction of the pairwise J entries randomly zeroed out (0 = fully dense,
+        the default -- unchanged behavior for existing callers). Real epistatic couplings are
+        typically sparse -- most position/amino-acid pairs don't actually interact -- so e.g.
+        sparsity_J=0.95 keeps only ~5% of entries nonzero (chosen at random), which is both
+        more biologically realistic and gives J a smaller overall magnitude/variance.
     """
-    key, key_Fv, key_Fs, key_Jv, key_Js = jax.random.split(key, 5)
+    key, key_Fv, key_Fs, key_Jv, key_Js, key_mask_v, key_mask_s = jax.random.split(key, 7)
     num_positions   = 7      # L
     num_amino_acids = 20     # A
-    
+
     ###############################################
     ### --------------- F score --------------- ###
     ###############################################
     F_v = jax.random.normal(key_Fv, shape=(num_amino_acids, num_positions))
     F_s = jax.random.normal(key_Fs, shape=(num_amino_acids, num_positions))
-    
+
     ###############################################
 
     ###############################################
@@ -476,21 +482,27 @@ def initialize_random_weights(key):
         for a in range(num_amino_acids)
         for b in range(num_amino_acids)
     ]
+    n_interactions = len(Interactions)
+    keep_prob = 1.0 - sparsity_J
 
-    pair_weights_viab = jax.random.normal(key_Jv, shape=(len(Interactions),))/10
+    pair_weights_viab = jax.random.normal(key_Jv, shape=(n_interactions,)) / 10
+    mask_viab = jax.random.bernoulli(key_mask_v, p=keep_prob, shape=(n_interactions,))
+    pair_weights_viab = pair_weights_viab * mask_viab
 
     J_v = build_J([
         (*ij, float(v))
         for ij, v in zip(Interactions, pair_weights_viab)
     ])
 
-    pair_weights_sel = jax.random.normal(key_Js, shape=(len(Interactions),))/10
+    pair_weights_sel = jax.random.normal(key_Js, shape=(n_interactions,)) / 10
+    mask_sel = jax.random.bernoulli(key_mask_s, p=keep_prob, shape=(n_interactions,))
+    pair_weights_sel = pair_weights_sel * mask_sel
 
     J_s = build_J([
         (*ij, float(v))
         for ij, v in zip(Interactions, pair_weights_sel)
     ])
-    
+
     ###############################################
-    
+
     return F_v, F_s, J_v, J_s
