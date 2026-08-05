@@ -149,6 +149,8 @@ def proportion_above_threshold(lambdas, thresholds_pct, names=None):
 #   6 - Matrix predicted by Student compared to the teacher one
 #   7 - Top k% recovery
 #   8 - plotting all lambdas in a loop
+#   9 - Entropy vs sequencing depth: stochastic NGS reads vs the noise-free true pool
+#  11 - Heatmap: top-k recovery across a 2D (N1, rho) parameter sweep
 #######################################################################################
 #######################################################################################
 
@@ -404,6 +406,35 @@ def plot_teacher_vs_student(F_teacher, F_student, title="Teacher vs Student weig
     return fig
 
 
+# 6b - Teacher vs Student SCORE (profile F + potts J combined), same scatter style as
+# plot_teacher_vs_student's third panel above, but for the actual compute_score(F, J)
+# output instead of raw F weights -- panel 3 above only checks single-position (F)
+# recovery, this checks whether predictions track the combined single- + pairwise-
+# interaction score, i.e. whether the model is doing well on BOTH interaction types.
+def plot_score_teacher_vs_student(score_gt, score_hat, title=None):
+    """
+    score_gt, score_hat : (num_sequences,) scores from protocol.compute_score(F, J),
+                          teacher vs recovered, e.g.
+                              score_gt  = protocol.compute_score(protocol.F_viab, protocol.J_viab)
+                              score_hat = protocol.compute_score(F_viab_hat, J_viab_hat)
+                          or the T-scaled combined_gt/combined_hat (viability + selectivity)
+                          from evaluate_profile_recovery, if checking both scores at once.
+    """
+    score_gt  = np.array(score_gt)
+    score_hat = np.array(score_hat)
+
+    r = pearson(score_gt, score_hat)
+    fig, ax = plt.subplots(figsize=(6, 5.5))
+    ax.scatter(score_gt, score_hat, s=8, alpha=0.4)
+    lims = [min(score_gt.min(), score_hat.min()), max(score_gt.max(), score_hat.max())]
+    ax.plot(lims, lims, 'k--', alpha=0.5)
+    ax.set_xlabel('Teacher score (F + J)')
+    ax.set_ylabel('Student score (F + J)')
+    ax.set_title(title or f'Teacher vs Student score (profile + potts)   Pearson r = {r:.3f}')
+    fig.tight_layout()
+    return fig
+
+
 # 7 - Top k% recovery
 def plot_topk_recovery(score_gt, score_hat, k_frac=0.10, title=None):
     """
@@ -626,6 +657,234 @@ def plot_lambda3p_dilution_scatter(protocol, dilution_factors, title=None):
     ax.legend(title='Dilution factor', loc='best', framealpha=0.9)
     fig.tight_layout()
     return fig
+
+
+# 9 - Entropy vs sequencing depth: stochastic NGS reads vs the noise-free true pool
+#
+# Ported from the collaborator's "model 3" notebook, section "Part VII -
+# Comparison randomness vs deterministic". That notebook ran a fully separate
+# noise-free ("deterministic") simulation of the whole protocol to get a
+# reference entropy; this Protocol class doesn't have an equivalent no-noise
+# simulation mode, so the reference used here is the entropy of the TRUE pool
+# itself (i.e. the counts *before* NGS is applied) -- which is exactly what the
+# noise-free simulation was converging to in the original notebook, since NGS
+# noise is the only thing separating "true pool" from "sequenced reads".
+def plot_entropy_vs_depth(protocol, D_values, pool='lambda0', title=None):
+    """
+    Sweeps the NGS sequencing depth D and plots how the Shannon entropy
+    measured from the resulting reads compares to two noise-free references:
+    the entropy of the TRUE underlying pool (what you'd measure with infinite
+    sequencing depth) and the theoretical maximum entropy (a perfectly uniform
+    pool spread over however many sequences are actually present).
+
+    Why this curve is useful: NGS is a two-stage sampling process (pipetting,
+    then PCR + sequencing) layered on top of the true pool. At low D that
+    sampling is noisy and under-represents rare sequences, which distorts the
+    measured entropy relative to the truth; as D grows, sampling noise shrinks
+    and the measured entropy should converge onto the true pool's entropy (the
+    red dashed line). A curve that DOESN'T converge as D grows a long way
+    signals a bug in the NGS pipeline, not just "normal" sampling noise.
+
+    protocol : a Protocol instance. protocol.D is temporarily overwritten for
+               each value in D_values and restored to its original value once
+               the sweep finishes (even if an error is raised partway through),
+               so this is safe to call on a protocol you're still using
+               elsewhere.
+    D_values : sequencing depths to sweep, e.g. np.logspace(6, 18, 13). Plotted
+               on a log x-axis (sequencing depth realistically spans many
+               orders of magnitude).
+    pool     : name of the protocol attribute to sequence at each depth, e.g.
+               'lambda0' (initial library, default) or 'lambda3' (post-
+               selectivity pool) -- whichever stage you want to probe.
+
+    Returns
+    -------
+    fig, H_ngs : the matplotlib figure and the list of measured NGS-read
+                 entropies (in nats, one per D_values entry, same convention as
+                 shannon_entropy elsewhere in this file), in case further
+                 analysis of the sweep is needed.
+    """
+    true_pool = np.array(getattr(protocol, pool))
+    H_true    = shannon_entropy(true_pool)
+    H_max     = float(np.log(max(int(np.sum(true_pool > 0)), 1)))
+
+    D_values   = list(D_values)
+    original_D = protocol.D
+    H_ngs = []
+    try:
+        for D in D_values:
+            protocol.D = float(D)
+            reads = np.array(protocol.NGS(getattr(protocol, pool)))
+            H_ngs.append(shannon_entropy(reads))
+    finally:
+        protocol.D = original_D  # always restore, even if NGS raised mid-sweep
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    ax.plot(D_values, H_ngs, marker='o', linestyle='-', color='tab:blue',
+            label='NGS reads (stochastic)')
+    ax.axhline(H_true, color='tab:red', linestyle='--', linewidth=2,
+               label=f'True {pool} entropy (noise-free)')
+    ax.axhline(H_max, color='black', linestyle=':', linewidth=1.5,
+               label='log(support size) (uniform pool)')
+
+    ax.set_xscale('log')
+    ax.set_xlabel('Sequencing depth D')
+    ax.set_ylabel('Shannon entropy (nats)')
+    ax.set_title(title or f'Shannon entropy vs sequencing depth ({pool})')
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.legend()
+    fig.tight_layout()
+    return fig, H_ngs
+
+
+# 11 - Heatmap: top-k recovery across a 2D (N1, rho) parameter sweep
+#
+# Ported from the collaborator's "model 3" notebook, section "Heatmap
+# analysis". The notebook swept its own library class's N1/d0 and rho
+# parameters; here it's adapted to this file's Protocol class, which exposes
+# the same two knobs as protocol.N1 and protocol._rho (stored with a leading
+# underscore -- there's no public `rho` attribute on Protocol, so that's the
+# name to pass values through when reading results back).
+def plot_topk_recovery_heatmap(protocol, N1_values, rho_values, k_frac=0.10,
+                                n_repeats=5, n_rounds=1, final_stage='lambda4',
+                                title=None):
+    """
+    2D parameter-sweep heatmap of top-k recovery over (N1, rho): how well the
+    sequences that end up MOST ABUNDANT after directed evolution match the
+    sequences that are truly best by the underlying viability + selectivity
+    score, as a function of two parameters that control how harsh the
+    population bottleneck is:
+      - N1  : plasmid molecules sampled/pipetted at the start of each round
+              (more molecules = less chance of losing a sequence to sampling
+              noise alone)
+      - rho : HEK cells transfected per plasmid molecule (fewer cells per
+              molecule = fewer independent chances for a sequence to be
+              captured and expressed)
+
+    How each grid cell is computed
+    -------------------------------
+    1. The "ground truth" top-k set is fixed ONCE, before the sweep, from
+       compute_score(F_viab, J_viab)/T_viab + compute_score(F_sel, J_sel)/T_sel
+       on protocol.sequence. This doesn't depend on any stochastic step, so
+       reusing the same fixed set for every grid point keeps the comparison
+       apples-to-apples.
+    2. For every (N1, rho) grid point: protocol.N1 and protocol._rho are
+       overwritten, then protocol.N_loop_DE(n_rounds) is run `n_repeats` times
+       (N_loop_DE already restarts from a fresh uniform lambda0 each call, so
+       every repeat is an independent trial). Each repeat's own top-k -- by
+       abundance in `final_stage` -- is compared against the fixed
+       ground-truth top-k, and the overlap fraction (recovered / k) is
+       recorded.
+    3. mean_recovery[i, j] is the average of that fraction over the n_repeats
+       runs at grid point (rho_values[i], N1_values[j]); std_recovery[i, j] is
+       its standard deviation, in case a cell's noise level matters to you.
+
+    The heatmap uses log-log axes (both parameters typically span several
+    decades), a viridis colormap fixed to [0, 1] (recovery is a fraction),
+    white contour lines at fixed values of mu = rho * N1 / d0 (the expected
+    number of HEK cells transfected per plasmid molecule, averaged across the
+    library -- the single combined quantity that mostly determines how harsh
+    the bottleneck is), and a red star marking the protocol's ORIGINAL (N1,
+    rho) values from before the sweep.
+
+    protocol    : a Protocol instance. protocol.N1, protocol._rho and every
+                  lambda* attribute are overwritten during the sweep and
+                  RESTORED to their original values once it finishes (even if
+                  it raises), so this is safe to call on a protocol you're
+                  still using elsewhere. This is an EXPENSIVE call -- it runs
+                  len(N1_values) * len(rho_values) * n_repeats full
+                  directed-evolution rounds (with a tqdm progress bar per
+                  round, from N_loop_DE) -- so keep the grid small (e.g. 6-10
+                  points per axis) for a first look.
+    N1_values   : plasmid molecules sampled per round to sweep (x-axis), e.g.
+                  np.geomspace(1e5, 1e9, 8)
+    rho_values  : HEK cells transfected per plasmid to sweep (y-axis), e.g.
+                  np.geomspace(1e-6, 1e-3, 8)
+    k_frac      : top fraction of the library defining "top-k" (default 10%)
+    n_repeats   : independent stochastic repeats averaged per grid point
+    n_rounds    : directed-evolution rounds per repeat (passed to
+                  N_loop_DE) -- default 1 for a lighter single-round sweep;
+                  raise it to see how the bottleneck compounds over several
+                  successive rounds, like the notebook's multi-cycle sweep did
+    final_stage : name of the protocol attribute whose abundance ranks the
+                  "recovered" top-k at each repeat (default 'lambda4', the
+                  final post-amplification pool)
+
+    Returns
+    -------
+    fig, mean_recovery, std_recovery : matplotlib figure and the two
+    (len(rho_values), len(N1_values)) result matrices, in case further
+    analysis of the sweep is needed.
+    """
+    N1_values  = np.asarray(list(N1_values), dtype=float)
+    rho_values = np.asarray(list(rho_values), dtype=float)
+
+    combined_gt = (np.array(protocol.compute_score(protocol.F_viab, protocol.J_viab)) / protocol._T_viab
+                   + np.array(protocol.compute_score(protocol.F_sel, protocol.J_sel)) / protocol._T_sel)
+    d0 = protocol.d0
+    k  = max(int(d0 * k_frac), 1)
+    top_gt = set(np.argsort(-combined_gt)[:k])
+
+    original_N1, original_rho = protocol.N1, protocol._rho
+    original_lambdas = {name: getattr(protocol, name) for name in
+                         ('lambda0', 'lambda0p', 'lambda1', 'lambda2', 'lambda2p',
+                          'lambda3', 'lambda3p', 'lambda4')}
+
+    mean_recovery = np.zeros((len(rho_values), len(N1_values)))
+    std_recovery  = np.zeros_like(mean_recovery)
+
+    try:
+        for i, rho_val in enumerate(rho_values):
+            for j, N1_val in enumerate(N1_values):
+                protocol.N1   = float(N1_val)
+                protocol._rho = float(rho_val)
+
+                recoveries = []
+                for _ in range(n_repeats):
+                    protocol.N_loop_DE(n_rounds)
+                    final_pool = np.array(getattr(protocol, final_stage))
+                    present    = np.flatnonzero(final_pool > 0)
+                    if len(present) == 0:
+                        recoveries.append(0.0)
+                        continue
+                    top_hat = set(present[np.argsort(-final_pool[present])[:k]])
+                    recoveries.append(len(top_gt & top_hat) / k)
+
+                mean_recovery[i, j] = np.mean(recoveries)
+                std_recovery[i, j]  = np.std(recoveries) if n_repeats > 1 else 0.0
+    finally:
+        protocol.N1, protocol._rho = original_N1, original_rho
+        for name, value in original_lambdas.items():
+            setattr(protocol, name, value)
+
+    X, Y    = np.meshgrid(N1_values, rho_values)
+    mu_grid = X * Y / d0
+
+    fig, ax = plt.subplots(figsize=(9, 6.5))
+    hm = ax.pcolormesh(N1_values, rho_values, mean_recovery, shading='nearest',
+                        cmap='viridis', vmin=0, vmax=1)
+    ax.set_xscale('log')
+    ax.set_yscale('log')
+
+    requested_mu_levels = [0.1, 1, 3, 5, 10, 30, 100, 300, 1000]
+    mu_levels = [m for m in requested_mu_levels if mu_grid.min() <= m <= mu_grid.max()]
+    if mu_levels:
+        cs = ax.contour(X, Y, mu_grid, levels=mu_levels, colors='white', linewidths=1.2)
+        ax.clabel(cs, fmt={m: rf'$\mu={m:g}$' for m in mu_levels}, fontsize=8)
+
+    current_mu = original_N1 * original_rho / d0
+    ax.scatter(original_N1, original_rho, marker='*', s=200, color='red',
+               edgecolor='white', linewidth=1, zorder=5,
+               label=f'Current point (mu={current_mu:.2f})')
+
+    fig.colorbar(hm, ax=ax, label=f'Mean top-{k} recovery ({n_repeats} repeats)')
+    ax.set_xlabel('N1 (plasmid molecules sampled)')
+    ax.set_ylabel(r'$\rho$ (HEK cells per plasmid)')
+    ax.set_title(title or f'Top-{k} recovery across (N1, rho) -- {final_stage}')
+    ax.legend(loc='lower left')
+    fig.tight_layout()
+    return fig, mean_recovery, std_recovery
 
 #######################################################################################
 #######################################################################################
