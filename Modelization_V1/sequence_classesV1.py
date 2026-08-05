@@ -290,8 +290,8 @@ class Protocol():
         - lambda3      : (d0,) capsid pool after retention, lambda2(s) * exp(noisy_scores(s) / T_sel),
                          thresholded to 0 below 1 (a variant can't have fewer than 1 copy)
         """
-        scores  = self.compute_score(self.F_sel, self.J_sel)
-        Z       = jax.random.normal(self._next_key(), scores.shape)
+        scores       = self.compute_score(self.F_sel, self.J_sel)
+        Z            = jax.random.normal(self._next_key(), scores.shape)
         noisy_scores = scores + self.noise_sel * Z
         raw_lambda3  = self.lambda2 * jnp.exp(noisy_scores / self._T_sel)
         self.lambda3 = jnp.where(raw_lambda3 < 1.0, 0.0, raw_lambda3)
@@ -409,7 +409,7 @@ class ProtocolBacterialCFU(Protocol):
         return self.lambda4
 
 class ProtocolV2(ProtocolBacterialCFU):
-    
+
     def selectivity(self) -> jax.Array:
         """
         Binomial retention: lambda3(s) ~ Binomial(n=lambda2(s), p=p_s), which
@@ -424,6 +424,36 @@ class ProtocolV2(ProtocolBacterialCFU):
         scores       = self.compute_score(self.F_sel, self.J_sel)
         p            = jax.nn.sigmoid(scores / self._T_sel)
         self.lambda3 = jax.random.binomial(self._next_key(), self.lambda2, p).astype(jnp.float32)
+        return self.lambda3
+
+
+class ProtocolV3(ProtocolV2):
+    """
+    Selectivity is capsids infecting target cells: a successful infection is followed by
+    viral replication (the variant's genome is copied inside the cell before new capsids are
+    packaged), so a single infecting particle can yield MANY progeny -- unlike ProtocolV2's
+    Binomial retention (a pure filter, lambda3(s) <= lambda2(s) always), this is a production
+    step and lambda3(s) CAN exceed lambda2(s) for well-selected variants.
+    """
+
+    def selectivity(self) -> jax.Array:
+        """
+        Infection + intracellular replication, same Poisson-rate shape as produce_capsids()
+        (rate = current count * exp(score / T)) instead of a retain-or-discard filter.
+
+        Variables :
+        - scores       : (d0,) selectivity score s_sel(s), from compute_score(F_sel, J_sel)
+        - Z            : (d0,) raw per-sequence noise, Z(s) ~ N(0,1)
+        - noisy_scores : (d0,) noisy selectivity score, scores(s) + noise_sel * Z(s)
+        - rate         : (d0,) expected post-infection/replication capsid count,
+                         lambda2(s) * exp(noisy_scores(s) / T_sel)
+        - lambda3      : (d0,) capsid pool after infection/replication, Poisson(rate(s))
+        """
+        scores       = self.compute_score(self.F_sel, self.J_sel)
+        Z            = jax.random.normal(self._next_key(), scores.shape)
+        noisy_scores = scores + self.noise_sel * Z
+        rate         = self.lambda2 * jnp.exp(noisy_scores / self._T_sel)
+        self.lambda3 = jax.random.poisson(self._next_key(), rate).astype(jnp.float32)
         return self.lambda3
 
 ###################################################################################################################
