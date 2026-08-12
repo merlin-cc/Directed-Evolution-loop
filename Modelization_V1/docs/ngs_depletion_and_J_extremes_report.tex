@@ -1,0 +1,406 @@
+\documentclass[11pt]{article}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{mathtools}
+\usepackage{url}
+\Urlmuskip=0mu plus 1mu
+
+\title{Session report: NGS sampling depletion, and the F/J extreme-variant investigation}
+\author{}
+\date{August 10, 2026}
+
+\newcommand{\code}[1]{\texttt{#1}}
+
+\begin{document}
+\sloppy
+\maketitle
+
+\begin{abstract}
+This session covered two mostly independent threads. Part~\ref{sec:ngs} fixes a physical-realism
+bug in the directed-evolution simulator (\code{sequence\_classesV1.py}): variants sampled for
+NGS were never removed from the pool that continues on to the next pipeline step, which silently
+understated the impact of the sampling/dilution factor. Part~\ref{sec:fj} investigates why, once
+we look at the top-50{,}000 (rather than top-5{,}000) variants by true fitness, an MLP trained to
+recover the fitness landscape from NGS-derived data starts missing an entire block of them --
+traces this to the pairwise coupling term $J$ dominating the score of extreme-tail variants,
+attempts an architectural fix (an explicit bilinear/Potts head), finds it only marginally helps,
+and diagnoses why. Part~\ref{sec:why-j} steps back and asks the more fundamental question: is
+$J$'s outsized role in the extreme tail a genuine, expected property of the landscape, or an
+artifact of how $F$ and $J$ were estimated in the first place.
+\end{abstract}
+
+\tableofcontents
+
+% ============================================================
+\section{NGS sampling should deplete the pool it measures}
+\label{sec:ngs}
+
+\subsection{The problem}
+
+In the real protocol, pulling an aliquot for NGS (pipetting, PCR amplification, sequencing)
+consumes those molecules -- they cannot also continue on to the next step of the pipeline. In
+\code{Protocol.loop\_DE()}, however, \code{NGS()} sampled a copy of the pool into a temporary
+\code{Lambda} pipeline and returned only the read counts; \code{self.lambda0}, \code{self.lambda2},
+and \code{self.lambda3} were left completely untouched. The same variants that were ``consumed''
+by an NGS checkpoint kept flowing downstream at full strength, as if the checkpoint had no cost.
+This silently \emph{understated} the importance of the \code{dilution\_factor} parameter: no matter
+how small the dilution factor (i.e. how large a fraction of the pool is pipetted out), the
+downstream pool size never actually dropped.
+
+\subsection{Fix 1: deplete the pool at each NGS checkpoint}
+
+A new method, \code{Protocol.\_ngs\_and\_deplete()}, was added: it performs the same
+pipetting~$\to$~PCR~$\to$~sequencing pipeline as the existing \code{NGS()}, but additionally
+returns the source pool with the pipetted aliquot subtracted off (floored at~0). \code{loop\_DE()}
+now calls this at all three checkpoints, with $g := \code{\_ngs\_and\_deplete}$:
+\[
+  (\lambda_0', \lambda_0) \leftarrow g(\lambda_0), \qquad
+  (\lambda_2', \lambda_2) \leftarrow g(\lambda_2), \qquad
+  (\lambda_3', \lambda_3) \leftarrow g(\lambda_3)
+\]
+so that \code{initial\_sampling()}, \code{selectivity()}, and \code{bacterial\_amplification()}
+all operate on the \emph{depleted} pool. The public \code{NGS()} method itself was kept
+non-destructive (it now just calls \code{\_ngs\_and\_deplete} and discards the depleted copy),
+since it is also used standalone elsewhere for what-if measurements on a frozen snapshot (e.g.
+\code{analysisV1.plot\_lambda3p\_dilution\_scatter}, which re-samples the same \code{lambda3} at
+several dilution factors and must not mutate it between draws).
+
+\subsection{Fix 2: Poisson sampling does not saturate at \code{dilution\_factor}=1}
+
+Testing the fix at \code{dilution\_factor=1} (all of the pool nominally pipetted out) revealed a
+second, deeper bug: many variants still survived depletion. \code{Lambda.sample\_sequences()} drew
+the aliquot as
+\[
+  X_s \sim \mathrm{Poisson}\!\left(\mathrm{pool}_s \cdot \tfrac{1}{\text{dilution\_factor}}\right),
+\]
+which is a good approximation of ``sample a small fraction without replacement'' only when the
+fraction $p = 1/\text{dilution\_factor}$ is small. As $p \to 1$, Poisson's own variance
+($\mathrm{sd} \approx \sqrt{\text{mean}}$) means the draw lands \emph{below} the true count on
+roughly half of all variants purely by chance, even though its mean exactly equals the pool size --
+leaving a nonzero, unconsumed residual for about half the variants, \emph{even at
+\code{dilution\_factor=1}}.
+
+The fix replaces this with
+\[
+  X_s \sim \mathrm{Binomial}(\mathrm{pool}_s,\, p),
+\]
+i.e. each molecule independently has probability $p$ of landing in the aliquot. This is exact
+rather than an approximation: it guarantees $X_s \le \mathrm{pool}_s$ always, and at $p=1$ every
+molecule is included with certainty (deterministic full consumption).
+
+\subsection{Verification}
+
+\begin{center}
+\begin{tabular}{lrr}
+\hline
+ & \code{dilution\_factor=1} & \code{dilution\_factor=10} \\
+\hline
+pool sum before depletion & 1{,}000{,}000 & 1{,}000{,}000 \\
+pool sum after depletion & 0 & 900{,}117 \\
+variants surviving (of 200 tested) & 0 & --- \\
+\hline
+\end{tabular}
+\end{center}
+
+At \code{dilution\_factor=1}, the pool is now fully and exactly consumed (0 survivors), matching
+the physical expectation. At \code{dilution\_factor=10}, roughly 90\% of the pool survives, as
+expected. A full \code{loop\_DE()} round at \code{dilution\_factor=1} also runs end-to-end without
+error, propagating \code{lambda0=0} into the rest of the pipeline correctly (a legitimate, if
+degenerate, consequence of spending 100\% of the input library on QC).
+
+\textbf{Files changed:} \code{Modelization\_V1/lib/sequence\_classesV1.py}
+(\code{Lambda.sample\_sequences}, \code{Protocol.NGS}, new \code{Protocol.\_ngs\_and\_deplete},
+\code{Protocol.loop\_DE}).
+
+% ============================================================
+\section{The extreme-tail investigation: does the MLP recover the best variants?}
+\label{sec:fj}
+
+\subsection{Starting observation}
+
+In \code{MLP\_for\_anticorrelated\_weights.ipynb} (real AAV9-derived $F_{\text{viab}}$/$J_{\text{viab}}$,
+anticorrelated $F_{\text{sel}}$/$J_{\text{sel}}$ with target correlation $-0.2$), a \code{ProfileMLP}
+is trained to predict NGS log-enrichment from sequence, then its recovery of the TRUE top-$K$
+global-optimum variants (found by exhaustively scoring all $20^7$ possible sequences) is checked.
+At $K=5{,}000$, almost all of these land where they should in the MLP's predicted distribution,
+except for one visibly mispredicted block. Raising $K$ to $50{,}000$ revealed a second, distinct
+block -- the mispredicted variants no longer looked like scattered outliers around a single
+well-predicted cluster, but like two genuinely separate populations.
+
+\subsection{Hypothesis: $F$ vs.\ $J$}
+
+The ground-truth score decomposes exactly as
+\[
+  \mathrm{score}(s) \;=\; \underbrace{\sum_{i} F[s_i, i]}_{F\text{-part (additive)}} \;+\;
+  \underbrace{\sum_{i<j} J[i,j,s_i,s_j]}_{J\text{-part (pairwise)}},
+\]
+and the working hypothesis was that the well-predicted block is dominated by $F$ (a simple, low-
+dimensional, easy-to-learn additive term) while the mispredicted block is dominated by $J$ (a much
+higher-dimensional pairwise term that a generic MLP has to approximate implicitly through
+hidden-layer nonlinearity, rather than being given the structure directly).
+
+\subsection{Verification}
+
+New cells were added to \code{MLP\_for\_anticorrelated\_weights.ipynb} decomposing each of the TRUE
+top-$50{,}000$ variants' scores into $F\text{-part}$/$J\text{-part}$ (via
+\code{compute\_F\_only(seq, F) = total\_score(seq) - F\_part}), and comparing:
+\begin{itemize}
+  \item the variance share of $F\text{-part}$ vs.\ $J\text{-part}$ within the top-$50{,}000$ group,
+        against the same split on a random $2{,}000{,}000$-variant sample;
+  \item a per-variant z-scored comparison ($F_z$, $J_z$, standardized against the random sample's
+        own mean/std) showing what fraction of top-$K$ variants have $J_z > F_z$.
+\end{itemize}
+Both confirmed the hypothesis directionally: $J$'s share of the score variance is much larger among
+the extreme top-$50{,}000$ than in a random sample. (One caveat, discovered only while writing this
+report: the printed variance-share percentages for the top-$K$ group came out well above 100\%
+(e.g.\ ``J explains 5030.0\%''). This is a real but misleading artifact of
+$\mathrm{Var}(\text{total}) = \mathrm{Var}(F) + \mathrm{Var}(J) + 2\,\mathrm{Cov}(F,J)$: within a
+\emph{selected} top-$K$ set, $F\text{-part}$ and $J\text{-part}$ are strongly \emph{negatively}
+covariant -- a variant needs a large $J$ to compensate for a mediocre $F$ to make the cut, or vice
+versa -- so $2\,\mathrm{Cov}(F,J)$ is large and negative, shrinking the total variance in the
+denominator far below either individual term. The z-score/scatter comparison is not affected by
+this and remains the more trustworthy diagnostic.)
+
+\subsection{Attempted fix: an explicit bilinear (Potts) head}
+
+Since $x_i^\top W_{ij}\, x_j = W_{ij}[s_i, s_j]$ exactly when $x$ is one-hot, a
+\code{BilinearHead} module was added computing $\sum_{i<j} x_i^\top W_{ij}\, x_j$ -- the same
+indicator-feature form as the true $J[i,j,a,b]$ -- and summed residually with the existing
+\code{ProfileMLP} branch (\code{ProfileMLPBilinear}). The idea: give the model direct,
+unmediated access to the pairwise structure instead of making it approximate that structure
+implicitly. This was implemented and trained in a new notebook,
+\code{MLP\_bilinear\_head\_anticorrelated.ipynb}, training a baseline plain \code{ProfileMLP} and a
+\code{ProfileMLP}+bilinear-head model side by side on the identical train/val split.
+
+\subsection{Result: barely any improvement}
+
+\begin{center}
+\begin{tabular}{lrr}
+\hline
+\textbf{Held-out test set} & viability $r$ & selectivity $r$ \\
+\hline
+baseline (plain MLP) & 0.9651 & 0.9021 \\
++ bilinear head & 0.9652 & 0.9095 \\
+\hline
+\end{tabular}
+
+\vspace{1em}
+\begin{tabular}{lrrr}
+\hline
+\textbf{TRUE top-50{,}000 set} & $r(\text{resid}, F\text{-part})$ & $r(\text{resid}, J\text{-part})$ & mean $|\text{resid}|$\\
+\hline
+viability, baseline     & 0.9767 & $-0.9911$ & 7.457 \\
+viability, + bilinear   & 0.9731 & $-0.9867$ & 6.943 \\
+selectivity, baseline   & 0.4890 & $-0.6418$ & 6.095 \\
+selectivity, + bilinear & 0.4396 & $-0.5462$ & 5.398 \\
+\hline
+\end{tabular}
+\end{center}
+(residual $:=$ predicted $-$ true, on the TRUE top-$50{,}000$ variants)
+
+Test-set correlation is essentially unchanged, and $r(\text{resid}, J\text{-part})$ -- which should
+shrink toward 0 if the bilinear head were correctly absorbing the pairwise structure -- barely
+moved for viability and only modestly improved for selectivity. Giving the model the ``right''
+functional form was not, by itself, enough.
+
+\subsection{Diagnosing why}
+
+Three candidate explanations were tested.
+
+\paragraph{(a) Rare training-data coverage of the relevant pairs -- refuted.} For each TRUE
+top-$50{,}000$ variant, its dominant (largest-$|J|$) contributing pair $(i,j,a,b)$ was looked up in
+the $20{,}000$-sequence training set. Median training-set count of that dominant pair: \textbf{52},
+essentially identical to a random training-distribution sequence's dominant pair (median
+\textbf{51}). Since sequences are drawn i.i.d.\ uniformly, every $(i,j,a,b)$ combination is
+represented with equal expected frequency regardless of its $J$-magnitude -- so the extreme
+variants do not rely on unusually rare training examples.
+
+\paragraph{(b) Explicit regularization / early stopping -- refuted.} The bilinear model was
+retrained with dropout and weight decay off and early stopping disabled (patience $=1000$,
+epochs $=1000$), driving training MSE down to $0.0002$ (essentially exact memorization of all
+$8{,}500$ training rows).
+
+\begin{center}
+\begin{tabular}{lrrrr}
+\hline
+config & train MSE & test $r$ & $r(\text{resid},F)$ & $r(\text{resid},J)$ \\
+\hline
+regularized (dropout 0.1, patience 20) & 0.0644 & 0.9652 & 0.9731 & $-0.9867$ \\
+unregularized (dropout 0, patience 1000) & 0.0002 & 0.9566 & 0.9691 & $-0.9817$ \\
+\hline
+\end{tabular}
+\end{center}
+
+Despite near-perfect training-set memorization, $r(\text{resid}, J\text{-part})$ barely moved
+($-0.987 \to -0.982$), and held-out test $r$ got slightly \emph{worse}. Explicit regularization is
+not the driver of the bias.
+
+\paragraph{(c) More training data -- inconclusive (confounded).} A retrain using the cached
+$2{,}000{,}000$-sequence dataset (vs.\ $20{,}000$) gave val MSE $\approx 3.85$, test $r = 0.31$,
+$r(\text{resid}, J\text{-part}) = -0.82$ -- worse-looking numbers, but \textbf{not a clean
+comparison}: the total sequencing budget $D$ is fixed, so spreading it over $100\times$ more
+distinct variants means $\sim\!100\times$ fewer reads per variant, and hence intrinsically noisier
+NGS-derived labels, independent of any modeling choice. Training hyperparameters (batch size,
+epoch budget, patience) also differed between the two runs. This experiment would need to be
+re-run with $D$ scaled up proportionally to diversity (holding per-variant read depth constant) to
+be a fair test of ``more data'' in isolation.
+
+\subsection{Leading hypothesis}
+
+The pattern that survives both refutations -- residual systematically \emph{underestimating}
+variants with large true $J\text{-part}$, essentially unchanged whether or not explicit
+regularization is present -- is consistent with \textbf{implicit minimum-norm shrinkage}: with
+$\approx\!8{,}540$ combined $F$/$J$ parameters against $\approx\!8{,}500$ effective training rows
+(train split of the $20{,}000$-sequence dataset), the regression problem is only barely determined.
+Gradient descent on an over/critically-parameterized model is known to converge toward the
+minimum-norm solution among all those that fit the training data equally well -- an implicit
+shrinkage-toward-zero that has nothing to do with dropout or weight decay, and that specifically
+underestimates the largest true parameter values. This was not independently confirmed today (it
+would need, e.g., a properly-controlled large-$N$ retrain, or an explicit low-rank / shared-strength
+reparameterization of the bilinear head) and should be treated as the leading hypothesis, not a
+settled conclusion.
+
+\textbf{Files added/changed:}
+\url{Modelization_V1/notebooks/selectivity_weight_regimes/MLP_for_anticorrelated_weights.ipynb}
+(new $F$/$J$-decomposition cells);
+\url{Modelization_V1/notebooks/selectivity_weight_regimes/MLP_bilinear_head_anticorrelated.ipynb}
+(new notebook, baseline vs.\ bilinear-head comparison).
+
+% ============================================================
+\section{Why does $J$ dominate the extreme tail -- and is our $J$ trustworthy?}
+\label{sec:why-j}
+
+The user's question going into this section: is it \emph{normal} that a handful of pairwise
+couplings end up mattering more than the entire additive profile for the best variants, or is this
+symptomatic of our particular estimate of $J$ being biased upward?
+
+\subsection{Why extreme-tail dominance by $J$ is, at least partly, expected}
+
+\paragraph{Term-count amplification.} For $L=7$ positions there are only 7 additive terms but
+$\binom{7}{2}=21$ pairwise terms -- three times as many. If individual $F$ and $J$ entries are of
+roughly comparable typical magnitude (plausible here, since these are real AAV9-recovered weights,
+not the synthetically down-scaled ones used elsewhere in this codebase), then for a random sequence
+\[
+  \mathrm{Var}(J\text{-part}) \;\approx\; 21 \cdot \mathrm{Var}(J_{\text{entry}})
+  \;>\;
+  \mathrm{Var}(F\text{-part}) \;\approx\; 7 \cdot \mathrm{Var}(F_{\text{entry}})
+\]
+purely from having three times as many summands, with no need for any single $J$ entry to be
+unusually large. This alone is a real, expected structural effect -- not a bias.
+
+\paragraph{Order-statistics amplification.} The score of a random sequence is (approximately, for
+largely independent terms) a sum of two roughly-Gaussian components, $F\text{-part}$ and
+$J\text{-part}$. The extreme tail of a sum of independent random variables is disproportionately
+driven by whichever component has the larger variance -- a component with 3$\times$ the variance
+contributes correspondingly more to \emph{how} a sum ends up in its own extreme tail. So even
+before considering estimation issues, $J$ should be expected to explain a \emph{larger} share of
+what makes the top-$50{,}000$ variants extreme than it explains of the population as a whole --
+qualitatively exactly what was measured.
+
+\paragraph{Biological plausibility.} This also matches basic protein biophysics: there is exactly
+one profile that is additively optimal (best amino acid at every position, independent of context),
+but combinatorially many ways for a sequence to be exceptional via coordinated, context-dependent
+interactions (structural contacts, compensatory pairs, packing interactions). It would be somewhat
+surprising if the \emph{most} exceptional variants in a real capsid landscape were reachable purely
+through independent, single-residue effects.
+
+\subsection{Candidate sources of genuine bias / overestimation in this specific pipeline}
+
+The above arguments say $J$-dominance of the tail is expected in kind, but they do not say the
+\emph{measured magnitude} of that dominance is trustworthy. There are concrete reasons to suspect
+our particular $J_{\text{viab}}$ (and, by construction, $J_{\text{sel,anti}}$) may be inflated:
+
+\paragraph{(i) Estimation noise inflation in the recovery procedure.} $F_{\text{viab}}$/$J_{\text{viab}}$
+are not measured directly; they are \emph{recovered} from a \code{ProfileMLP} that was itself
+fitted to real AAV9 data, via \code{extract\_effective\_F}/\code{extract\_effective\_J}
+(\code{AAV9\_profile\_model.ipynb}), which probe the fitted MLP with single- and double-mutant
+scans over $M=256$ background sequences. Critically, $\hat J_{ij}(a,b)$ is a \emph{four-term}
+contrast,
+\[
+  \hat J_{ij}(a,b) \;=\; \big\langle \text{double}(a,b) - \text{single}_i(a) - \text{single}_j(b) + \text{base} \big\rangle_{\text{backgrounds}},
+\]
+against $\hat F_i(a)$'s single-term contrast $\langle \text{single}_i(a) - \text{base}\rangle$. Each
+extra subtracted term adds its own estimation noise, and \emph{noise inflates apparent variance}
+($\mathrm{Var}(\text{estimate}) = \mathrm{Var}(\text{truth}) + \mathrm{Var}(\text{noise})$, never
+less). With $\sim\!60\times$ more free entries to estimate ($8{,}400$ vs.\ $140$) from the same
+$256$ backgrounds, and a noisier per-entry contrast, $\hat J$ is the more likely of the two to carry
+a meaningfully inflated apparent variance relative to its true value.
+
+\paragraph{(ii) Aliasing of higher-order epistasis onto the pairwise term.} The recovery procedure
+\emph{assumes} the underlying landscape is exactly additive + pairwise. Nothing guarantees the real
+AAV9 MLP's fitted landscape is free of third-order-and-above interactions; if it is not, that
+residual structure has nowhere else to go in a Potts-shaped extraction and gets folded into
+$\hat J$, inflating its apparent importance for reasons that have nothing to do with true pairwise
+epistasis.
+
+\paragraph{(iii) Propagation into the selectivity landscape.} $J_{\text{sel,anti}}$ is not estimated
+independently -- it is built by \code{initialize\_anticorrelated\_weights}, which mixes
+$J_{\text{viab}}$'s \emph{own} values and scale with fresh noise
+($\mathrm{Var}(J_{\text{sel}}) = \mathrm{Var}(J_{\text{viab}})$ by construction, at any correlation
+level). Whatever inflation is present in $J_{\text{viab}}$ is therefore inherited by
+$J_{\text{sel,anti}}$ automatically, so this is not a concern isolated to the viability landscape.
+
+\subsection{How this could be checked (not done today)}
+
+\begin{itemize}
+  \item \textbf{Bootstrap stability of $\hat J$.} Re-run \code{extract\_effective\_J} on several
+        disjoint subsets of the $256$ backgrounds and compare entry-by-entry variance across
+        subsets to the entries' own typical magnitude. If $\hat J$ entries are unstable
+        (bootstrap std comparable to or larger than the entry values themselves), that is direct
+        evidence of estimation-noise inflation rather than genuine signal.
+  \item \textbf{Unconditional $\mathrm{Var}(F)$ vs.\ $\mathrm{Var}(J)$, entrywise.} Compare the raw
+        entrywise variance of $F_{\text{viab}}$ against $J_{\text{viab}}$ directly (not conditioned
+        on the top-$K$ selection), to separate the ``3$\times$ as many terms'' structural effect
+        (Section~4.1) from a genuine per-entry magnitude difference.
+  \item \textbf{Compare against a synthetic ground truth.} Re-run the same top-$K$ F/J-dominance
+        analysis on \code{initialize\_random\_weights}' synthetic $F$/$J$ (where $J$ is deliberately
+        scaled down by $\tfrac{1}{10}$ relative to $F$, and is not subject to any recovery-noise
+        inflation since it is exact by construction). If $J$-dominance of the extreme tail
+        \emph{disappears} there, that strengthens the case that today's result is at least partly
+        an artifact of the AAV9 recovery pipeline rather than a universal property of Potts-shaped
+        landscapes.
+\end{itemize}
+
+\subsection{Tentative conclusion}
+
+Both effects are almost certainly present simultaneously: term-count and order-statistics
+amplification (Section~4.1) are structurally guaranteed to make $J$ matter disproportionately in
+the extreme tail, in any Potts-shaped landscape, real or synthetic. Whether the specific
+\emph{magnitude} we observed today is entirely genuine, or partly inflated by recovery-procedure
+noise and higher-order-epistasis aliasing (Section~4.2), was not resolved this session and is the
+most valuable open question to settle before drawing further conclusions from
+$J$-vs-$F$ comparisons on this particular AAV9-derived landscape.
+
+% ============================================================
+\section{Summary of files touched today}
+
+\begin{itemize}
+  \item \textbf{Modified:} \url{Modelization_V1/lib/sequence_classesV1.py} -- NGS depletion
+        (\code{\_ngs\_and\_deplete}) and Poisson$\to$Binomial fix in \code{sample\_sequences}.
+  \item \textbf{Modified:}
+        \url{Modelization_V1/notebooks/selectivity_weight_regimes/MLP_for_anticorrelated_weights.ipynb}
+        -- added $F$/$J$ decomposition, variance-share, and z-score dominance cells.
+  \item \textbf{Added:}
+        \url{Modelization_V1/notebooks/selectivity_weight_regimes/MLP_bilinear_head_anticorrelated.ipynb}
+        -- baseline \code{ProfileMLP} vs.\ \code{ProfileMLP}+bilinear-head comparison.
+  \item \textbf{Added:} this report.
+\end{itemize}
+
+\section{Open items for a future session}
+
+\begin{enumerate}
+  \item Re-run the ``more data'' test properly controlled (scale $D$ with diversity so per-variant
+        read depth is held constant), to cleanly separate sample size from label noise.
+  \item Bootstrap \code{extract\_effective\_J} to directly measure its own estimation noise floor.
+  \item Compare $J$-dominance of the extreme tail on the AAV9-recovered landscape against the
+        synthetic \code{initialize\_random\_weights} landscape, where $J$'s scale is exact and
+        deliberately small.
+  \item If minimum-norm shrinkage is confirmed as the driver, consider a low-rank or otherwise
+        shared-strength reparameterization of the bilinear head (fewer effective degrees of freedom
+        than $8{,}400$ independent entries) rather than more data alone.
+  \item Longer-term: this is precisely the kind of bias that an actual directed-evolution loop
+        (propose candidates $\to$ get them re-measured $\to$ retrain) is designed to correct, rather
+        than a one-shot fit from round-1 random data.
+\end{enumerate}
+
+\end{document}

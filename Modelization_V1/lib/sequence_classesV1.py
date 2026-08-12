@@ -60,16 +60,21 @@ class Lambda():
 
     def sample_sequences(self) -> jax.Array:
         """
-        Pipetting is simulated by a Poisson distribution
+        Pipetting is simulated by a Binomial draw per variant: each of the pool[s]
+        molecules independently has probability p = 1/dilution_factor of landing in
+        the pipetted aliquot. This replaces the earlier Poisson(pool[s] * p) draw,
+        which only approximates Binomial(pool[s], p) for p << 1 (large dilution) --
+        at p close to 1 (small dilution_factor) Poisson's own variance (std ~
+        sqrt(mean)) makes it land below the true count on roughly half the draws,
+        leaving a nonzero, unconsumed residual behind for about half the variants
+        even at dilution_factor=1. Binomial fixes both issues: sampled[s] <=
+        pool[s] always (can't pipette out more molecules than exist), and at
+        dilution_factor=1 (p=1) every molecule is included with certainty, so the
+        pool is consumed exactly -- nothing survives to the next step.
         """
-        """
-        proportions = self.pool / jnp.sum(self.pool)
-        return jax.random.poisson(self._next_key(), proportions * self.N1)
-        """
-        N_sample = jnp.sum(self.pool)/self.dilution_factor #dilution by 10
-        proportions = self.pool / jnp.sum(self.pool)
-        return jax.random.poisson(self._next_key(), proportions * N_sample)
-        
+        p = 1.0 / self.dilution_factor
+        return jax.random.binomial(self._next_key(), self.pool, p)
+
         
     def sequence_reads(self) -> jax.Array:
         """
@@ -204,16 +209,41 @@ class Protocol():
         """
         Full NGS process on a pool: pipetting -> PCR amplification -> sequencing,
         delegating to the Lambda class instead of redoing its logic here.
+        Non-destructive on _lambda (see _ngs_and_deplete for the version used by
+        loop_DE's checkpoints) -- used for standalone/what-if measurements, e.g.
+        plot_lambda3p_dilution_scatter's repeated re-sampling of a frozen snapshot.
 
         Variables :
         - pipeline : temporary Lambda wrapping _lambda, reused for each of the 3 steps
         - reads    : (d0,) final sequencing reads
         """
+        reads, _ = self._ngs_and_deplete(_lambda)
+        return reads
+
+    def _ngs_and_deplete(self, _lambda) -> tuple[jax.Array, jax.Array]:
+        """
+        Same pipetting -> PCR amplification -> sequencing as NGS(), but also removes
+        the pipetted aliquot from _lambda: those molecules are consumed by PCR and
+        sequencing, so in the real protocol they cannot flow into the next step. Without
+        this, a variant "seen" by NGS never disappears from the dataset and the
+        dilution_factor's effect on the surviving pool is underestimated.
+
+        Variables :
+        - pipeline : temporary Lambda wrapping _lambda, reused for pcr/sequencing
+        - sampled  : (d0,) molecules pipetted out of _lambda for this NGS run
+        - reads    : (d0,) final sequencing reads
+        - depleted : (d0,) _lambda with the pipetted aliquot removed (floored at 0)
+
+        Returns : (reads, depleted)
+        """
         pipeline      = Lambda(_lambda, self.dilution_factor, self.D, self._next_key(), K_MM=self._K_MM)
-        pipeline.pool = pipeline.sample_sequences().astype(jnp.float32)
+        sampled       = pipeline.sample_sequences().astype(jnp.float32)
+        pipeline.pool = sampled
         pipeline.pool = pipeline.pcr_amplification()
-        return pipeline.sequence_reads()
-    
+        reads         = pipeline.sequence_reads()
+        depleted      = jnp.maximum(_lambda - sampled, 0.0)
+        return reads, depleted
+
     def initial_sampling(self) -> jax.Array:
         mu_1 = self.N1 * self.lambda0 / jnp.sum(self.lambda0)
         self.lambda1 = jax.random.poisson(self._next_key(), mu_1)
@@ -313,30 +343,34 @@ class Protocol():
         return self.lambda4
 
     def loop_DE(self) -> list[list[jax.Array]]:
-        """ 
+        """
         Runs one full directed-evolution round: sampling -> capsid production -> selectivity,
-        with NGS taken as a side-channel measurement at 3 checkpoints (never fed back in)
+        with NGS taken as a measurement at 3 checkpoints. Each checkpoint pipettes an aliquot
+        out of the pool it measures (Lambda.sample_sequences(), scaled by dilution_factor),
+        and that aliquot is consumed by PCR + sequencing -- it cannot flow into the next step,
+        so the measured pool is depleted by its own aliquot before it's used downstream
+        (see _ngs_and_deplete). A variant analyzed by NGS therefore disappears from the
+        dataset by exactly the amount that was pipetted out for it.
 
         Variables :
-        - lambda0  : (d0,) initial library, unchanged (deterministic)
-        - lambda1  : (d0,) sampled plasmid pool, from sampling() — uses true lambda0, not lambda0p
-        - lambda2  : (d0,) capsid pool after transfection/production, from produce_capsids()
-        - lambda3  : (d0,) capsid pool after selectivity retention, from selectivty()
-        - lambda0p : (d0,) NGS reads of lambda0 (first NGS checkpoint)
-        - lambda2p : (d0,) NGS reads of lambda2 (second NGS checkpoint)
-        - lambda3p : (d0,) NGS reads of lambda3 (third NGS checkpoint)
+        - lambda0  : (d0,) initial library, depleted by the lambda0p aliquot before sampling()
+        - lambda1  : (d0,) sampled plasmid pool, from sampling() — uses true (depleted) lambda0, not lambda0p
+        - lambda2  : (d0,) capsid pool after transfection/production, depleted by the lambda2p aliquot before selectivity()
+        - lambda3  : (d0,) capsid pool after selectivity retention, depleted by the lambda3p aliquot before bacterial_amplification()
+        - lambda0p : (d0,) NGS reads of the lambda0 aliquot (first NGS checkpoint)
+        - lambda2p : (d0,) NGS reads of the lambda2 aliquot (second NGS checkpoint)
+        - lambda3p : (d0,) NGS reads of the lambda3 aliquot (third NGS checkpoint)
 
-        Returns : [[lambda0, lambda1, lambda2, lambda3], [lambda0p, lambda2p, lambda3p]]
+        Returns : [[lambda0, lambda1, lambda2, lambda3, lambda4], [lambda0p, lambda2p, lambda3p]]
                 (true-pool row, NGS-read row — mirrors the two-row protocol diagram)
         """
-        self.lambda0  = self.lambda0
-        self.lambda0p = self.NGS(self.lambda0)
-        self.lambda1  = self.initial_sampling()
-        self.lambda2  = self.produce_capsids()
-        self.lambda2p = self.NGS(self.lambda2)
-        self.lambda3  = self.selectivity()
-        self.lambda3p = self.NGS(self.lambda3)
-        self.lambda4  = self.bacterial_amplification()
+        self.lambda0p, self.lambda0 = self._ngs_and_deplete(self.lambda0)
+        self.lambda1                = self.initial_sampling()
+        self.lambda2                = self.produce_capsids()
+        self.lambda2p, self.lambda2 = self._ngs_and_deplete(self.lambda2)
+        self.lambda3                = self.selectivity()
+        self.lambda3p, self.lambda3 = self._ngs_and_deplete(self.lambda3)
+        self.lambda4                = self.bacterial_amplification()
         return [[self.lambda0, self.lambda1, self.lambda2, self.lambda3, self.lambda4], [self.lambda0p, self.lambda2p, self.lambda3p]]
     
     def N_loop_DE(self, number_of_loop) -> list[list[jax.Array]]:
