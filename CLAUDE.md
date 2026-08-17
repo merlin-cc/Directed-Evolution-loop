@@ -29,6 +29,9 @@ Directed-Evolution-loop/
 │   │   ├── directed_evolution_loop/     # DE_loopV1.ipynb — boucle de simulation d'évolution dirigée bout-en-bout
 │   │   ├── selectivity_weight_regimes/  # trio F_sel/J_sel corrélé/anticorrélé/indépendant + variantes (bilinear head,
 │   │   │                                #   double mutant designed, profile-only) + CSV de diversité mis en cache
+│   │   │                                #   MLP_viability_noise_denoising.ipynb : viabilité SEULE (GT F_viab/J_viab
+│   │   │                                #   régularisé), sweep de noise_viab à pool de séquences fixe pour tester si
+│   │   │                                #   le MLP débruite (corrélation prédiction vs score vrai vs. label NGS brut)
 │   │   ├── aav_viability_test/          # AAV{2,5,9}_profile_model.ipynb (entraîne ProfileMLP sur données réelles),
 │   │   │                                #   AAV_MLP_weights_recovery.ipynb, checks de recouvrement d'erreur/top500
 │   │   └── mlp_regression/              # expériences de recouvrement MLP (DEEPMLP, ProfileMLP_recovery_nnx, ...)
