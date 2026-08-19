@@ -31,7 +31,7 @@ D       = 10_000_000_000
 phi     = 0.1    # NB dispersion for sequencing reads (smaller phi = closer to Poisson)
 
 class Lambda():
-    def __init__(self, pool, dilution_factor, D, key, K_MM = K_MM) -> None:
+    def __init__(self, pool, dilution_factor, D, key, multinomialNGS = False, K_MM = K_MM, M = M, phi = phi) -> None:
         """
         pool  :  (num_sequences,) - abundance/count vector this pipeline
                                     samples/amplifies/sequences; only relative
@@ -42,11 +42,17 @@ class Lambda():
                                     goes through this class)
         diltuion factor : int     - Dilution factor for the sampling
         D     :  int              - Sequencing depth
+        multinomialNGS : bool     - if True, sequence_reads() draws Multinomial(D, proportions)
+                                    instead of the Negative Binomial (skips overdispersion, phi unused)
+        K_MM  :  float            - Michaelis-Menten saturation scale for pcr_amplification()
+        M     :  int              - number of PCR cycles for pcr_amplification()
+        phi   :  float            - NB dispersion for sequence_reads() (ignored if multinomialNGS)
         """
         self.pool   = pool
         self.dilution_factor = dilution_factor
         self.D      = float(D)
         self.key    = key
+        self.multinomialNGS = multinomialNGS
         self.M      = M
         self.K_MM   = K_MM
         self.phi    = phi
@@ -75,28 +81,6 @@ class Lambda():
         p = 1.0 / self.dilution_factor
         return jax.random.binomial(self._next_key(), self.pool, p)
 
-        
-    def sequence_reads(self) -> jax.Array:
-        """
-        The sequencing is simulated by a Negative Binomial distribution, matching
-        sequencing_approx from the notebook (accounts for PCR/sequencing overdispersion
-        instead of the pure-Poisson approximation):
-            q_s  = pool(s) / sum(pool)
-            mu_s = D * q_s
-            r    = 1 / phi                 (dispersion, phi fixed)
-            p_s  = r / (r + mu_s)
-        JAX has no built-in negative-binomial sampler, so this uses the standard
-        Gamma-Poisson mixture identity: NB(r, p) = Poisson(Gamma(r, scale=(1-p)/p)).
-        """
-        proportions = self.pool / jnp.sum(self.pool)
-        mu = self.D * proportions
-        r  = 1.0 / self.phi
-        p  = r / (r + mu)
-
-        key_gamma, key_poisson = self._next_key(), self._next_key()
-        gamma_sample = jax.random.gamma(key_gamma, r, shape=mu.shape) * ((1.0 - p) / p)
-        return jax.random.poisson(key_poisson, gamma_sample)
-
     def pcr_amplification(self) -> jax.Array:
         """
         M cycles of PCR amplification with Michaelis-Menten kinetics.
@@ -111,6 +95,39 @@ class Lambda():
             p_n       = 1.0 / (1.0 + jnp.sum(self.pool) / self.K_MM)
             self.pool = self.pool + jax.random.poisson(self._next_key(), self.pool * p_n).astype(jnp.float32)
         return self.pool
+    
+    def sequence_reads(self) -> jax.Array:
+        """
+        The sequencing is simulated by a Negative Binomial distribution, matching
+        sequencing_approx from the notebook (accounts for PCR/sequencing overdispersion
+        instead of the pure-Poisson approximation):
+            q_s  = pool(s) / sum(pool)
+            mu_s = D * q_s
+            r    = 1 / phi                 (dispersion, phi fixed)
+            p_s  = r / (r + mu_s)
+        JAX has no built-in negative-binomial sampler, so this uses the standard
+        Gamma-Poisson mixture identity: NB(r, p) = Poisson(Gamma(r, scale=(1-p)/p)).
+
+        If multinomialNGS is True, the overdispersion is skipped and reads are drawn
+        directly as Multinomial(n=D, p=proportions) -- reads sum to exactly D, unlike
+        the NB path where the per-variant draws are independent and only sum to D in
+        expectation.
+        """
+        sum = jnp.sum(self.pool)
+        if sum == 0:
+            raise ValueError("No sequence in the pool, thus no NGS can be performed")
+        proportions = self.pool / sum
+
+        if self.multinomialNGS:
+            return jax.random.multinomial(self._next_key(), self.D, proportions)
+
+        mu = self.D * proportions
+        r  = 1.0 / self.phi
+        p  = r / (r + mu)
+
+        key_gamma, key_poisson = self._next_key(), self._next_key()
+        gamma_sample = jax.random.gamma(key_gamma, r, shape=mu.shape) * ((1.0 - p) / p)
+        return jax.random.poisson(key_poisson, gamma_sample)
 
     def ngs(self) -> jax.Array:
         """
@@ -128,13 +145,13 @@ class Lambda():
         
 
 class Protocol():
-    def __init__(self, N0, N1, dilution_factor, sequences, D, F_viab, J_viab, F_sel, 
-                 J_sel, noise_viab, noise_sel, alpha = alpha, 
-                 rho = rho, T_viab = T_viab, T_sel = T_sel, M = M, 
-                 K_MM = K_MM) -> None:
-        """ 
+    def __init__(self, N0, N1, dilution_factor, sequences, D, F_viab, J_viab, F_sel,
+                 J_sel, noise_viab, noise_sel, multinomialNGS = False, alpha = alpha,
+                 rho = rho, T_viab = T_viab, T_sel = T_sel, M = M,
+                 K_MM = K_MM, K_MM_amp = K_MM_amp, phi = phi) -> None:
+        """
         This class defined method for each block of the road map
-        
+
         Variables :
         - N0                : number of sequences in the initial library
         - N1                : initial number of sequences sampled
@@ -146,11 +163,15 @@ class Protocol():
         - F_viab or _sel    : profile scores
         - J_viab or _sel    : pott's scores
         - noise_viab / _sel : noise Z in viability and selectivity steps
+        - multinomialNGS    : if True, NGS checkpoints draw Multinomial(D, proportions)
+                              reads instead of the overdispersed Negative Binomial (phi unused)
         - alpha             : number of capsids per HEK cell transfected
         - rho               : number of HEK cells per plasmids transfected
         - T_viab or sel     : viability or selectivity pressure
-        - M                 : number of PCR cycle
-        - K_MM              : michaelis constant for PCR
+        - M                 : number of PCR / bacterial-amplification cycles
+        - K_MM              : michaelis constant for the NGS pipeline's PCR step
+        - K_MM_amp          : michaelis constant for bacterial_amplification()
+        - phi               : NB dispersion for sequencing reads (ignored if multinomialNGS)
         """
         self.key        = jax.random.key(42)
         self.model      = "Potts"
@@ -176,6 +197,7 @@ class Protocol():
         self.J_sel      = J_sel
         self.noise_viab = noise_viab
         self.noise_sel  = noise_sel
+        self.multinomialNGS = multinomialNGS
         ### ---- Other values ---- ###
         self._alpha     = alpha
         self._rho       = rho
@@ -183,6 +205,8 @@ class Protocol():
         self._T_sel     = T_sel
         self._M         = M
         self._K_MM      = K_MM
+        self._K_MM_amp  = K_MM_amp
+        self._phi       = phi
         ### ---------------------- ###
     
     def _next_key(self) -> jax.Array:
@@ -236,7 +260,9 @@ class Protocol():
 
         Returns : (reads, depleted)
         """
-        pipeline      = Lambda(_lambda, self.dilution_factor, self.D, self._next_key(), K_MM=self._K_MM)
+        pipeline      = Lambda(_lambda, self.dilution_factor, self.D, self._next_key(),
+                               multinomialNGS = self.multinomialNGS, K_MM = self._K_MM,
+                               M = self._M, phi = self._phi)
         sampled       = pipeline.sample_sequences().astype(jnp.float32)
         pipeline.pool = sampled
         pipeline.pool = pipeline.pcr_amplification()
@@ -337,7 +363,7 @@ class Protocol():
         - pipeline : temporary Lambda wrapping lambda3, reused only for pcr_amplification()
         - lambda4  : (d0,) pool after M growth cycles, saturating at K_MM (same formula as PCR)
         """
-        pipeline      = Lambda(self.lambda3, self.N1, self.D, self._next_key(), K_MM = K_MM_amp)
+        pipeline      = Lambda(self.lambda3, self.N1, self.D, self._next_key(), K_MM = self._K_MM_amp, M = self._M)
         pipeline.pool = self.lambda3.astype(jnp.float32)
         self.lambda4  = pipeline.pcr_amplification()
         return self.lambda4

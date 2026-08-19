@@ -26,6 +26,13 @@ Directed-Evolution-loop/
 │   │   ├── MLP_regV1.py                 # tentative MLP profile-only, abandonnée
 │   │   └── aav9_{F,J}_viab_mlp.npy      # gitignorés — artefacts dérivés, régénérés via AAV9_profile_model.ipynb
 │   ├── notebooks/
+│   │   ├── analysis of correlation/     # F_permutation_recovery_correlation.ipynb : F_viab AAV9 réel, J_viab=J_sel=0
+│   │   │                                #   (pas d'épistasie pour ce premier passage) ; F_sel = 10 permutations des
+│   │   │                                #   lignes (axe acide aminé) de F_viab (une par clé jax), corrélation GT
+│   │   │                                #   avec F_viab mesurée ; pool de séquences + split train/val/test fixes
+│   │   │                                #   pour les 10 runs ; un ProfileMLP entraîné par permutation sur le log
+│   │   │                                #   enrichment de sélectivité (target2), F_sel_hat recouvré par scan
+│   │   │                                #   single-mutant, comparé au F_sel vrai de ce run
 │   │   ├── directed_evolution_loop/     # DE_loopV1.ipynb — boucle de simulation d'évolution dirigée bout-en-bout
 │   │   ├── selectivity_weight_regimes/  # trio F_sel/J_sel corrélé/anticorrélé/indépendant + variantes (bilinear head,
 │   │   │                                #   double mutant designed, profile-only) + CSV de diversité mis en cache
