@@ -15,8 +15,7 @@ Directed-Evolution-loop/
 │   │   ├── RegressionV1.py            # ridge-regression dataset builders
 │   │   ├── initialize_weights.py      # loads real AAV9 F_viab/J_viab, builds correlated/anticorrelated/indep F_sel/J_sel
 │   │   ├── MLP_regV1.py               # early/abandoned profile-only MLP attempt
-│   │   ├── aav9_F_viab_mlp.npy        # gitignored — derived artifact, see "Data & derived artifacts" below
-│   │   └── aav9_J_viab_mlp.npy        # gitignored — derived artifact, see "Data & derived artifacts" below
+│   │   └── aav{2,5,9}_{F,J}_viab_mlp.npy  # tracked in git (tiny) — derived artifacts, see "Data & derived artifacts" below
 │   ├── notebooks/
 │   │   ├── directed_evolution_loop/   # DE_loopV1.ipynb — the end-to-end directed-evolution simulation loop
 │   │   ├── selectivity_weight_regimes/# F_sel/J_sel correlated / anticorrelated / independent trio, + playground + plotting
@@ -54,18 +53,24 @@ Directed-Evolution-loop/
 
 ## Data & derived artifacts
 
-Raw data and everything derived from it are **gitignored** (`*.csv`, `*.npy`, ...) — a
-fresh clone won't have them. Regenerate them in this order:
-
-1. **Raw AAV data** (`aav5.csv`, `aav9.csv`) — place them in
-   `Modelization_V1/notebooks/aav_viability_test/`. Nothing in this repo generates them;
-   get them from wherever the team keeps the IDV AAV sequencing exports.
-2. **`aav9_F_viab_mlp.npy` / `aav9_J_viab_mlp.npy`** — run `AAV9_profile_model.ipynb`'s
-   export cell (section 3b, right after `F_mlp_fj, J_mlp =
-   extract_effective_FJ_mlp(...)`). It trains `ProfileMLP` on `aav9.csv` and writes the
-   two `.npy` files into `Modelization_V1/lib/`, where `initialize_weights.py` expects
-   them.
-3. **`diversity*.csv` datasets** in `notebooks/selectivity_weight_regimes/` —
+1. **Raw AAV NGS data** (`aav2.csv`, `aav5.csv`, `aav9.csv`) — gitignored, too large to
+   track in git (`aav5.csv` alone is ~90MB). Published instead as assets on the
+   [`aav-raw-ngs-data-v1` release](https://github.com/merlin-cc/Directed-Evolution-loop/releases/tag/aav-raw-ngs-data-v1).
+   Download the 3 files and place them directly in
+   `Modelization_V1/notebooks/aav_viability_test/`:
+   ```bash
+   gh release download aav-raw-ngs-data-v1 --repo merlin-cc/Directed-Evolution-loop \
+     --dir Modelization_V1/notebooks/aav_viability_test/
+   ```
+   (or download them by hand from the release page above, no `gh` required).
+2. **`aav{2,5,9}_F_viab_mlp.npy` / `aav{2,5,9}_J_viab_mlp.npy`** in `Modelization_V1/lib/` —
+   tiny (a few hundred KB total) derived weight arrays, **tracked directly in git**, so a
+   fresh clone has them without any extra step. Only regenerate them if you actually need
+   to: run the corresponding `AAV{2,5,9}_profile_model.ipynb`'s export cell (section 3b,
+   right after `F_mlp_fj, J_mlp = extract_effective_FJ_mlp(...)`) — it trains `ProfileMLP`
+   on that AAV's raw CSV from step 1 and overwrites the `.npy` pair in `Modelization_V1/lib/`,
+   where `initialize_weights.py` expects them.
+3. **`diversity*.csv` datasets** in `notebooks/selectivity_weight_regimes/` — gitignored,
    auto-generated (and cached) the first time each of `MLP_for_correlated_weights.ipynb`
    / `MLP_for_anticorrelated_weights.ipynb` / `MLP_for_independent_weights.ipynb` runs.
    The first run of each is slow (MLP training + a brute-force scan over the full

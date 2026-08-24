@@ -35,6 +35,18 @@ def precision_at_k(score_gt, score_hat, k_frac=0.10):
     top_hat = set(np.argsort(-np.array(score_hat))[:k])
     return len(top_gt & top_hat) / k
 
+def topk_recovery(score_a, score_b, k=1000):
+    """Fraction of the absolute top-k (by score_a) that are also in the absolute top-k (by
+    score_b) -- same set-intersection-over-k recovery as precision_at_k, but parameterized by
+    an absolute count instead of a population fraction, and symmetric: neither argument has to
+    be the "ground truth" (e.g. useful to compare GT-vs-protocol, GT-vs-MLP and
+    protocol-vs-MLP top-k sets against each other on the same footing)."""
+    score_a, score_b = np.asarray(score_a), np.asarray(score_b)
+    k = min(k, len(score_a))
+    top_a = set(np.argsort(-score_a)[:k])
+    top_b = set(np.argsort(-score_b)[:k])
+    return len(top_a & top_b) / k
+
 def shannon_entropy(counts):
     """Shannon entropy (nats) of a count vector, ignoring zero entries."""
     counts = np.array(counts, dtype=float)
@@ -436,16 +448,22 @@ def plot_score_teacher_vs_student(score_gt, score_hat, title=None):
 
 
 # 7 - Top k% recovery
-def plot_topk_recovery(score_gt, score_hat, k_frac=0.10, title=None):
+def plot_topk_recovery(score_gt, score_hat, k_frac=0.10, title=None,
+                        xlabel='GT score', ylabel='Predicted score', ax=None):
     """
     GT-vs-predicted score scatter, colored by top-k% recovery category — matches
     the top-k recovery plot from Ridge_regression_for_linear_model.ipynb (cell 21):
     Recovered (top-k in both), Missed (GT top-k only), False positive
     (predicted top-k only), Rest — with the GT/predicted top-k thresholds drawn in.
 
-    score_gt, score_hat : (num_sequences,) ground-truth and predicted scores
-                          (e.g. combined = viab/T_viab + sel/T_sel)
-    k_frac              : top fraction of the library defining "top-k" (default 10%)
+    score_gt, score_hat : (num_sequences,) two scores to compare -- named "gt"/"hat" for the
+                          common ground-truth-vs-predicted case, but neither has to actually be
+                          a ground truth (e.g. protocol-measured vs. MLP-predicted both work).
+    k_frac               : top fraction of the library defining "top-k" (default 10%)
+    xlabel, ylabel       : axis labels, override when score_gt/score_hat aren't literally GT/predicted
+    ax                   : existing Axes to draw into (e.g. one panel of a comparison grid) --
+                          when given, no new Figure is created and the caller owns tight_layout()/
+                          show(); when None (default), a standalone Figure is created and returned.
     """
     score_gt  = np.array(score_gt)
     score_hat = np.array(score_hat)
@@ -459,7 +477,9 @@ def plot_topk_recovery(score_gt, score_hat, k_frac=0.10, title=None):
     only_hat = np.array(sorted(top_hat - top_gt))
     rest     = np.array(sorted(set(range(N)) - top_gt - top_hat))
 
-    fig, ax = plt.subplots(figsize=(7, 5))
+    fig = None
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(7, 5))
     ax.scatter(score_gt[rest],     score_hat[rest],     s=4,  alpha=0.2, color='lightgray',   label='Rest')
     ax.scatter(score_gt[only_hat], score_hat[only_hat], s=12, alpha=0.6, color='darkorange',  label=f'False pos. ({len(only_hat)})')
     ax.scatter(score_gt[only_gt],  score_hat[only_gt],  s=12, alpha=0.6, color='steelblue',   label=f'Missed ({len(only_gt)})')
@@ -475,13 +495,14 @@ def plot_topk_recovery(score_gt, score_hat, k_frac=0.10, title=None):
     ax.axhline(thr_hat, color='darkorange', linestyle=':', lw=1.2, label='Hat threshold')
 
     p = precision_at_k(score_gt, score_hat, k_frac=k_frac)
-    ax.set_xlabel('GT score')
-    ax.set_ylabel('Predicted score')
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
     ax.set_title(title or f'Top-{int(k_frac * 100)}% recovery   Precision = {p:.3f}')
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
     ax.legend(fontsize=9, markerscale=2, borderaxespad=0.3, borderpad=0.4, handlelength=1.2)
-    fig.tight_layout()
+    if fig is not None:
+        fig.tight_layout()
     return fig
 
 # 8 - Plotting all lambdas for a loop
@@ -556,13 +577,23 @@ def plot_all_lambda_scores(protocol, title="Viability vs selectivity score, colo
     (x = viability score, y = selectivity score, color = abundance at that stage),
     but one panel per stage instead of only lambda0. Color uses a log scale (counts
     span many orders of magnitude), so each panel only plots sequences with nonzero
-    abundance at that particular stage.
+    abundance at that particular stage. Every panel shares the SAME x/y axis limits
+    (the full viab_scores/sel_scores range, computed once) instead of each Axes
+    auto-scaling to just its own surviving/masked points -- otherwise panels with
+    fewer surviving variants (e.g. lambda3p late in the pipeline) silently zoom in,
+    making the spread of points look different across panels for a reason that has
+    nothing to do with the data itself.
 
     protocol : a Protocol instance that has already run at least one round (e.g.
                via loop_DE()), so all lambda* attributes hold real values.
     """
     viab_scores = np.array(protocol.compute_score(protocol.F_viab, protocol.J_viab))
     sel_scores  = np.array(protocol.compute_score(protocol.F_sel, protocol.J_sel))
+
+    x_pad = 0.02 * (viab_scores.max() - viab_scores.min())
+    y_pad = 0.02 * (sel_scores.max() - sel_scores.min())
+    xlim  = (viab_scores.min() - x_pad, viab_scores.max() + x_pad)
+    ylim  = (sel_scores.min() - y_pad, sel_scores.max() + y_pad)
 
     panels = [
         ('lambda0',  protocol.lambda0),
@@ -589,6 +620,8 @@ def plot_all_lambda_scores(protocol, title="Viability vs selectivity score, colo
         else:
             ax.text(0.5, 0.5, 'no data', transform=ax.transAxes,
                     ha='center', va='center', color='gray')
+        ax.set_xlim(xlim)
+        ax.set_ylim(ylim)
         ax.set_xlabel('Viability score')
         ax.set_ylabel('Selectivity score')
         ax.set_title(name)
