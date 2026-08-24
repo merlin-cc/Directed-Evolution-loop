@@ -51,27 +51,57 @@ Directed-Evolution-loop/
 │   │   │                                #   batch_size relevé à 2048 en conséquence), sweep de noise_viab (bruit d'expression
 │   │   │                                #   par cellule) ; teste si le ProfileMLP débruite réellement (GT<->MLP doit rester
 │   │   │                                #   au-dessus de GT<->protocole quand le bruit augmente) ; multinomialNGS=True (nouveau
-│   │   │                                #   défaut standard du projet, cf. ci-dessous)
+│   │   │                                #   défaut standard du projet, cf. ci-dessous). Section 10 (ajoutée après coup) : sweep
+│   │   │                                #   2D d0 x noise_viab — pour chaque noise_viab (grille 1D existante), 5 valeurs de d0
+│   │   │                                #   (20k/50k/100k/200k/500k, incluant le d0=200k de base du notebook) ; boucle externe
+│   │   │                                #   sur d0 (pool + ProtocolV3 reconstruits à neuf, N1=mu*d0/rho pour garder mu=50),
+│   │   │                                #   boucle interne sur noise_viab (objet protocol réutilisé, comme le sweep 1D) ; 40
+│   │   │                                #   combinaisons (d0, noise_viab), chacune avec un ProfileMLP frais ; recovery top-1000
+│   │   │                                #   tracée à la fois sur le test fold interne au sweep et sur le pool d'éval fixe 50k
 │   │   │                                # D_sequencing_depth_sweep.ipynb : même mu=50/T_viab=0.8/noise_viab=0.5/d0=200 000 fixés,
 │   │   │                                #   sweep de D (profondeur de séquençage NGS par checkpoint, Multinomial(D, proportions)
 │   │   │                                #   si multinomialNGS=True) de 1e6 à 1e10 ; courbes attendues monotones croissantes
 │   │   │                                #   (contrairement à T_viab, pas de régime "trop élevé" pathologique), avec plateau de
 │   │   │                                #   rendements décroissants à D élevé une fois les autres sources de bruit dominantes
-│   │   │                                # diversity_sweep.ipynb : cette fois d0 (diversité de la librairie, 5k à 1M) EST la
-│   │   │                                #   variable balayée ; mu=50 compensé à chaque d0 via N1=mu*d0/rho (rho=1e-4 fixé,
+│   │   │                                # diversity_sweep.ipynb : cette fois d0 (diversité de la librairie, 5k à 200k) EST la
+│   │   │                                #   variable balayée ; mu=10 compensé à chaque d0 via N1=mu*d0/rho (rho=1e-4 fixé,
 │   │   │                                #   10x plus petit que RHO_REF ailleurs — sans incidence par elle-même, cf. section 3
 │   │   │                                #   de mu_HEK), mais D=1e8 reste FIXE (non compensé) donc reads/séquence=D/d0 diminue
 │   │   │                                #   avec d0 : isole l'effet "dilution d'un budget NGS fixe par une librairie plus
 │   │   │                                #   diverse", indépendamment de l'effet multiplicité déjà couvert par mu_HEK. Pool +
 │   │   │                                #   ProtocolV3 reconstruits à neuf à chaque d0 (contrairement aux autres sweeps qui
 │   │   │                                #   mutent un seul objet protocol réutilisé) ; batch_size adaptatif (max(256,
-│   │   │                                #   n_train//50)) vu l'écart de taille de pool (200x entre le plus petit et le plus
-│   │   │                                #   grand d0 testé)
+│   │   │                                #   n_train//50)) vu l'écart de taille de pool entre le plus petit et le plus grand
+│   │   │                                #   d0 testé. N0=150*N1 (contrainte labo : N1 doit rester au moins 150x plus petit
+│   │   │                                #   que N0) — c'est cette contrainte, combinée à mu, qui plafonne la grille à d0=200k
+│   │   │                                #   (grille allait jusqu'à 1M sous l'ancien défaut mu=50, ce qui poussait N0 au-delà
+│   │   │                                #   du plafond pratique ~5e12 ; baissé à mu=10 pour cette famille de notebooks plutôt
+│   │   │                                #   que de garder mu=50 avec une grille tronquée — cf. "État actuel")
 │   │   │                                # diversity_sweep_adaptive_D.ipynb : compagnon direct du précédent, mêmes mu/rho/T_viab/
-│   │   │                                #   noise_viab/grille de d0, mais D(d0) = 50 000 * d0 (reads/séquence CONSTANT à 50 000,
-│   │   │                                #   soit le ratio du baseline D=1e9/d0=20 000 déjà utilisé partout ailleurs — pas une
-│   │   │                                #   valeur externe arbitraire) au lieu de D fixe : isole si la diversité a un coût
-│   │   │                                #   propre au-delà de la simple dilution du budget NGS déjà montrée dans diversity_sweep
+│   │   │                                #   noise_viab/grille de d0/N0=150*N1, mais D(d0) = 50 000 * d0 (reads/séquence CONSTANT
+│   │   │                                #   à 50 000, soit le ratio du baseline D=1e9/d0=20 000 déjà utilisé partout ailleurs —
+│   │   │                                #   pas une valeur externe arbitraire) au lieu de D fixe : isole si la diversité a un
+│   │   │                                #   coût propre au-delà de la simple dilution du budget NGS déjà montrée dans diversity_sweep
+│   │   │                                # unified_parameter_sweep.ipynb (2026-08-24) : consolide TOUS les sweeps ci-dessus
+│   │   │                                #   (mu, T_viab, noise_viab 1D+2D, D, diversity D-fixe/D-adaptatif) PLUS la comparaison
+│   │   │                                #   shallow/deep MLP de deeper_mlp/, dans UN seul notebook prévu pour tourner sans
+│   │   │                                #   surveillance (nuit) — but explicite : une base de paramètres partagée (rho=1e-4,
+│   │   │                                #   mu=10, N0=150*N1, D=1e9, T_viab=0.8, noise_viab=0.5, pool fixe d0=20 000) réutilisée
+│   │   │                                #   par chaque section sauf le paramètre balayé, là où les notebooks séparés avaient
+│   │   │                                #   dérivé vers des bases incohérentes (mu 25-50, rho 1e-3/1e-4, tailles de pool
+│   │   │                                #   20k/30k/50k/200k selon le notebook). Sections A-D (mu/T_viab/noise_viab/D) partagent
+│   │   │                                #   LE MÊME objet ProtocolV3 réutilisé en séquence (comme dans chaque notebook source) ;
+│   │   │                                #   sections E-H (2D noise_viab×d0, diversity D-fixe, diversity D-adaptatif, shallow vs
+│   │   │                                #   deep) reconstruisent un pool frais par d0, avec DIVERSITY_GRID (5k-200k) partagé
+│   │   │                                #   partout. Corrige au passage l'incohérence de deeper_mlp/diversity_sweep_deeper_mlp.ipynb
+│   │   │                                #   (D=5e8/noise_viab=3 au lieu de D=1e8/noise_viab=0.5) — section H utilise maintenant
+│   │   │                                #   exactement les mêmes valeurs que la section F, rendant la comparaison shallow/deep
+│   │   │                                #   réellement valide. Les notebooks sources individuels restent en place, NON modifiés
+│   │   │                                #   par ce fichier — mu_HEK_multiplicity_sweep.ipynb/T_viab_sweep.ipynb/noise_viab_sweep.ipynb/
+│   │   │                                #   D_sequencing_depth_sweep.ipynb gardent leur propre base (mu=25-50, rho=1e-3, d0
+│   │   │                                #   20k/30k/200k selon le fichier) ; seuls diversity_sweep.ipynb/diversity_sweep_adaptive_D.ipynb/
+│   │   │                                #   diversity_sweep_deeper_mlp.ipynb ont été mis à jour séparément vers mu=10/N0=150*N1
+│   │   │                                #   (cf. "État actuel" 2026-08-24) — la base harmonisée n'existe que dans ce nouveau fichier
 │   │   ├── directed_evolution_loop/     # DE_loopV1.ipynb — boucle de simulation d'évolution dirigée bout-en-bout
 │   │   ├── selectivity_weight_regimes/  # trio F_sel/J_sel corrélé/anticorrélé/indépendant + variantes (bilinear head,
 │   │   │                                #   double mutant designed, profile-only) + CSV de diversité mis en cache
@@ -82,8 +112,10 @@ Directed-Evolution-loop/
 │   │   │                                #   AAV_MLP_weights_recovery.ipynb, checks de recouvrement d'erreur/top500
 │   │   ├── mlp_regression/              # expériences de recouvrement MLP (DEEPMLP, ProfileMLP_recovery_nnx, ...)
 │   │   │   └── claude_variants/         # variantes exploratoires assistées par IA des mêmes expériences
-│   │   └── deeper_mlp/                  # diversity_sweep_deeper_mlp.ipynb : reprend exactement diversity_sweep.ipynb
-│   │                                    #   (mu=50/rho=1e-4/D=1e8 fixe/T_viab=0.8/noise_viab=0.5, même grille d0 5k-1M)
+│   │   └── deeper_mlp/                  # diversity_sweep_deeper_mlp.ipynb : proche de diversity_sweep.ipynb mais PAS
+│   │                                    #   identique — mu=10/rho=1e-4/N0=150*N1 alignés, mais D=5e8 fixe (pas 1e8) et
+│   │                                    #   noise_viab=3 (pas 0.5, écart non résolu — cf. "État actuel") ; grille d0 propre
+│   │                                    #   200 à 200k (sur-ensemble du 5k-200k de diversity_sweep.ipynb côté petit d0)
 │   │                                    #   mais compare CETTE FOIS deux architectures entraînées sur les mêmes données :
 │   │                                    #   ShallowProfileMLP (~27k params, l'archi standard du projet, juste renommée)
 │   │                                    #   vs DeepProfileMLP (~90k params, nouveau) — embedding par position partagé
@@ -129,19 +161,44 @@ jamais un « score » (ne pas écrire "predicted score", "F_score", "J_score", "
 ## État actuel
 
 - **Convention depuis 2026-08-21 : pool d'évaluation fixe cross-notebook.** Tous les notebooks de
-  `analysis of parameters for viability/` (sauf `mu_HEK_multiplicity_sweep.ipynb`, pas encore
-  fait) et `deeper_mlp/diversity_sweep_deeper_mlp.ipynb` incluent maintenant une section "Fixed
-  50,000-sequence evaluation pool" : `EVAL_POOL_KEY_SEED=999`, `EVAL_POOL_SIZE=50_000` (mêmes
-  valeurs partout — réutiliser exactement ce couple pour rester comparable). Corrige le problème
-  du split train/test interne au sweep qui devient dégénéré à petit pool (ex. `d0=200` →
-  test fold de 100 séquences → `topk_recovery(k=1000)` se clampe trivialement à 100%). En plus du
-  score GT (déterministe) et de la prédiction MLP (inférence pure) sur ce pool fixe, chaque
-  notebook simule aussi un `protocol_eval` **séparé** (jamais mélangé au pool d'entraînement, ce
-  qui fausserait `mu`/`D` à petit `d0` — cf. discussion du 2026-08-21) pour obtenir un vrai
-  `GT<->protocole` sur ce pool commun : simulation unique si `mu`/`rho`/`D`/`T_viab`/`noise_viab`
-  sont tous fixes (`diversity_sweep.ipynb`), re-simulée à chaque point si le paramètre balayé
-  affecte `protocol_eval` aussi (`T_viab_sweep.ipynb`, `noise_viab_sweep.ipynb`,
-  `D_sequencing_depth_sweep.ipynb`, `diversity_sweep_adaptive_D.ipynb` où `D` dépend de `d0`).
+  `analysis of parameters for viability/` et `deeper_mlp/diversity_sweep_deeper_mlp.ipynb`
+  incluent maintenant une section "Fixed 50,000-sequence evaluation pool" : `EVAL_POOL_KEY_SEED=999`,
+  `EVAL_POOL_SIZE=50_000` (mêmes valeurs partout — réutiliser exactement ce couple pour rester
+  comparable). Corrige le problème du split train/test interne au sweep qui devient dégénéré à
+  petit pool (ex. `d0=200` → test fold de 100 séquences → `topk_recovery(k=1000)` se clampe
+  trivialement à 100%) — dans les notebooks où `d0` varie (`diversity_sweep.ipynb`,
+  `diversity_sweep_adaptive_D.ipynb`, `deeper_mlp/diversity_sweep_deeper_mlp.ipynb`), la recovery
+  top-K en fonction du test fold interne au sweep a été **retirée** (gardée seulement pour
+  Pearson r, qui ne dégénère pas de la même façon) au profit du pool fixe. En plus du score GT
+  (déterministe) et de la prédiction MLP (inférence pure) sur ce pool fixe, chaque notebook simule
+  aussi un `protocol_eval` **séparé** (jamais mélangé au pool d'entraînement, ce qui fausserait
+  `mu`/`D` à petit `d0` — cf. discussion du 2026-08-21) pour obtenir un vrai `GT<->protocole` sur
+  ce pool commun : simulation unique si `mu`/`rho`/`D`/`T_viab`/`noise_viab` sont tous fixes
+  (`diversity_sweep.ipynb`), re-simulée à chaque point si le paramètre balayé affecte
+  `protocol_eval` aussi (`mu_HEK_multiplicity_sweep.ipynb` sections 7.6/7.8/8.1/8.3 où `mu` est
+  balayé, `T_viab_sweep.ipynb`, `noise_viab_sweep.ipynb`, `D_sequencing_depth_sweep.ipynb`,
+  `diversity_sweep_adaptive_D.ipynb` où `D` dépend de `d0`). `mu_HEK_multiplicity_sweep.ipynb`
+  (le dernier à recevoir cette convention) ajoute ses sections 7.8/8.3 SANS renuméroter le reste
+  (insérées juste avant les sections `## 8.`/à la toute fin, cf. son propre historique de
+  croissance par ajout de sections plutôt que d'insertion).
+- **Convention depuis 2026-08-24 : `mu=10` + `N0=150*N1` dans la famille "diversity" (`d0` swept
+  sur une large plage).** Contrainte labo : `N1` (cellules HEK transfectées) doit rester au moins
+  150x plus petit que `N0` (copies de plasmide dans la prep), donc `N0=150*N1` remplace les
+  anciennes conventions incohérentes (`N0=N1*10` dans certaines cellules, `N0=1e9` fixe dans
+  d'autres, parfois les deux dans le même notebook). Combiné à `rho=1e-4`, ce ratio plafonne `N0`
+  à un ordre de grandeur raisonnable (~5e12) seulement si `mu` reste modéré — d'où le passage de
+  l'ancien défaut `mu=50` à `mu=10` pour cette famille, et la grille `DIVERSITY_GRID` plafonnée à
+  `d0=200 000` (au lieu de `1 000 000`) dans `diversity_sweep.ipynb` et
+  `diversity_sweep_adaptive_D.ipynb`. `deeper_mlp/diversity_sweep_deeper_mlp.ipynb` avait déjà sa
+  propre grille `200`-`200 000` (jamais poussée à `1M`), donc seul son `mu`/`N0` a changé, pas sa
+  grille. **Ne s'applique qu'à cette famille** (`d0` variant sur une large plage) — `mu_HEK_
+  multiplicity_sweep.ipynb` (où `mu` est justement la variable balayée), `T_viab_sweep.ipynb`,
+  `noise_viab_sweep.ipynb`, `D_sequencing_depth_sweep.ipynb` gardent `mu=50` à `d0=20 000` fixe,
+  ce qui ne pose pas ce problème (`N0` y reste largement sous le plafond même à l'ancien ratio).
+  **Écart non résolu** : `deeper_mlp/diversity_sweep_deeper_mlp.ipynb` utilise `noise_viab=3` (pas
+  `0.5` comme `diversity_sweep.ipynb`) — repéré en marge de ce changement, pas corrigé (flag
+  ouvert, décision à prendre par Aziz). Les 3 notebooks concernés ont leurs sorties de cellule
+  effacées (paramètres changés, anciens résultats plus valides) — à ré-exécuter.
 - Travail récent concentré sur `aav_viability_test/` et `selectivity_weight_regimes/` : clarification
   que les notebooks "brute-force top-K global" (sur les 20^7 séquences théoriques) et "top-500 réel"
   (sur la vraie librairie AAV9, held-out test split) **ne sont pas contradictoires** — ils scorent des
