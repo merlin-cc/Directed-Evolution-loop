@@ -329,7 +329,7 @@ class Protocol():
         mask      = cell_idx[None, :] < C[:, None]
 
         Z          = jax.random.normal(self._next_key(), shape=(self.d0, max_cells))
-        E          = jnp.where(mask, jnp.exp(self.noise_viab * Z), 0.0)
+        E          = jnp.where(mask, jnp.exp(self.noise_viab * Z / self._T_viab), 0.0)
         total_rate = self._alpha * jnp.exp(scores / self._T_viab) * jnp.sum(E, axis=1)
 
         self.lambda2 = jax.random.poisson(self._next_key(), total_rate).astype(jnp.float32)
@@ -530,6 +530,8 @@ def build_J(interactions):
     (i, j, a, b, value) entries.  Both (i,j,a,b) and (j,i,b,a) are set.
     """
     A, L = 20, 7
+    if interactions.shape != (L, L, A, A, 1):
+        raise ValueError(f"shape mismatch, the dim of interactions must be ({L}, {L}, {A}, {A}, 1)")
     J = np.zeros((L, L, A, A))
     for (i, j, a, b, v) in interactions:
         J[i, j, a, b] += v

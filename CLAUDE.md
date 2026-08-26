@@ -24,7 +24,29 @@ Directed-Evolution-loop/
 │   │   ├── RegressionV1.py              # construction de datasets pour ridge regression
 │   │   ├── initialize_weights.py        # charge F_viab/J_viab AAV9 réels, construit F_sel/J_sel corrélés/anticorrélés/indép.
 │   │   ├── MLP_regV1.py                 # tentative MLP profile-only, abandonnée
-│   │   └── aav9_{F,J}_viab_mlp.npy      # gitignorés — artefacts dérivés, régénérés via AAV9_profile_model.ipynb
+│   │   ├── aav9_{F,J}_viab_mlp.npy      # gitignorés — artefacts dérivés, régénérés via AAV9_profile_model.ipynb
+│   │   └── cross_packaging_draft.py     # (2026-08-26) DRAFT non intégré, non importé ailleurs — sketch pour
+│   │                                    #   modéliser le cross-packaging (variant non-viable co-transfecté avec un
+│   │                                    #   variant fonctionnel dans la même cellule HEK, qui encapside par erreur
+│   │                                    #   son ADN — explique la bimodalité observée sur fit4functionaav9.csv,
+│   │                                    #   cf. log_enrichment_histograms.ipynb) : 2 sous-classes de ProtocolV3
+│   │                                    #   redéfinissant produce_capsids(). Constat clé : Protocol.produce_capsids()
+│   │                                    #   actuel tire C_s (cellules transfectées) INDÉPENDAMMENT par séquence — deux
+│   │                                    #   séquences différentes ne partagent jamais une cellule simulée, donc
+│   │                                    #   aucun substrat pour le cross-packaging n'existe dans le modèle actuel.
+│   │                                    #   ProtocolCrossPackagingBackground (recommandée) : terme de fuite agrégé
+│   │                                    #   (cross_packaging_rate * médiane des taux parmi les séquences
+│   │                                    #   transfectées) ajouté au taux de Poisson de chaque séquence — reste O(d0),
+│   │                                    #   testée manuellement (rate=0 reproduit exactement Protocol, rate>0 donne
+│   │                                    #   un plancher non-nul à toutes les séquences au lieu de 99% à zéro).
+│   │                                    #   Médiane plutôt que moyenne : la moyenne est tirée vers le haut par les
+│   │                                    #   quelques séquences à score extrême (vérifié empiriquement, ~5x l'écart).
+│   │                                    #   ProtocolCrossPackagingMechanistic : pool de cellules physiques partagé,
+│   │                                    #   mais PAS tractable à l'échelle N1 du projet (jusqu'à ~1e10 dans certains
+│   │                                    #   sweeps) — plafonnée à MAX_MECHANISTIC_CELLS=5M, lève une erreur au-delà ;
+│   │                                    #   gardée comme esquisse de la structure du problème, PAS fonctionnelle en
+│   │                                    #   l'état (chaque cellule n'a qu'un seul occupant — la redistribution
+│   │                                    #   multi-occupants, cœur du cross-packaging, reste un TODO).
 │   ├── notebooks/
 │   │   ├── analysis of correlation/     # F_permutation_recovery_correlation.ipynb : F_viab AAV9 réel, J_viab=J_sel=0
 │   │   │                                #   (pas d'épistasie pour ce premier passage) ; F_sel = 10 permutations des
@@ -110,6 +132,102 @@ Directed-Evolution-loop/
 │   │   │                                #   le MLP débruite (corrélation prédiction vs score vrai vs. label NGS brut)
 │   │   ├── aav_viability_test/          # AAV{2,5,9}_profile_model.ipynb (entraîne ProfileMLP sur données réelles),
 │   │   │                                #   AAV_MLP_weights_recovery.ipynb, checks de recouvrement d'erreur/top500
+│   │   │                                # AAV9_fitting_protocol.ipynb (2026-08-25) : calibre les hyperparamètres du
+│   │   │                                #   protocole simulé (mu/T_viab/noise_viab/D) pour imiter la stochasticité du
+│   │   │                                #   VRAI aav9.csv (68 776 séquences), pas juste recouvrer le score GT. Partie 1 :
+│   │   │                                #   5 runs identiques du protocole (même F_viab/J_viab réels AAV9), histogramme
+│   │   │                                #   des 10 corrélations pairwise → plafond de repeatability intrinsèque au
+│   │   │                                #   protocole simulé (r≈0.99 au baseline mu=50/T_viab=0.8/noise_viab=0.5/D=1e9,
+│   │   │                                #   donc quasi pas de bruit à ce point de fonctionnement, sur cette librairie
+│   │   │                                #   réelle à large dynamique). Partie 2 : `R_REAL = pearson(real_target,
+│   │   │                                #   viab_score_GT)` (viab_score_GT = compute_score(F_viab,J_viab), déterministe,
+│   │   │                                #   sans bruit protocole) sert de cible — recherche aléatoire (pas grille
+│   │   │                                #   complète, 10 800 combos impraticable) sur (mu,T_viab,noise_viab,D) pour
+│   │   │                                #   qu'un run simulé atteigne r(sim,GT)≈R_REAL dans ~50% des répétitions
+│   │   │                                #   (= médiane), pas en collant à real_target directement (hors d'atteinte, cf.
+│   │   │                                #   plafond partie 1). Classement des candidats par `|r_mean - R_REAL|` (PAS par
+│   │   │                                #   success_fraction seule — avec peu de répétitions elle est trop grossière,
+│   │   │                                #   quasi binaire 0/1, et peut désigner arbitrairement un mauvais candidat en cas
+│   │   │                                #   d'égalité — bug corrigé en cours de route). Diagnostic clé : un bon `r`
+│   │   │                                #   global peut être trompeur sur une distribution bimodale (sépare juste les
+│   │   │                                #   deux clusters viable/mort) sans imiter l'étalement réel à l'intérieur de
+│   │   │                                #   chaque cluster (pics simulés trop étroits/déterministes si T_viab est bas —
+│   │   │                                #   T_viab amplifie l'écart de score SANS diviser le terme de bruit, donc SNR
+│   │   │                                #   explose à T_viab bas) — d'où la grille de tous les candidats testés
+│   │   │                                #   (histogrammes réel vs simulé côte à côte, `frac(target1=0)` affiché : un
+│   │   │                                #   score correct peut aussi venir d'une majorité de séquences invisibles aux
+│   │   │                                #   deux checkpoints NGS, `target1=log(1)=0` par construction du pseudocount).
+│   │   │                                #   Partie 5 : cellule manuelle éditable (hyperparamètres + F_viab/J_viab) pour
+│   │   │                                #   explorer à la main. Partie 6 : superposition score GT vs log enrichment
+│   │   │                                #   simulé (ATTENTION : pas la même échelle si T_viab≠1, E[target1]≈score/T_viab
+│   │   │                                #   pas score — le Pearson r n'est lui pas affecté, invariant à un rescaling
+│   │   │                                #   positif). Partie 7 : ProfileMLP (même archi que AAV9_profile_model.ipynb)
+│   │   │                                #   entraîné sur 25 000 séquences réelles, testé sur le reste, histogrammes
+│   │   │                                #   réel vs prédit superposés. `error` dans aav9.csv est une constante 0.1
+│   │   │                                #   partout (placeholder, pas une vraie incertitude par séquence) — pas de vraie
+│   │   │                                #   structure de réplicats dans ce CSV pour calibrer le bruit autrement.
+│   │   │                                # AAV2_fitting_protocol.ipynb / AAV5_fitting_protocol.ipynb (2026-08-25) :
+│   │   │                                #   sections 5-7 d'AAV9_fitting_protocol.ipynb rejouées sur aav2.csv (53 383
+│   │   │                                #   séquences) et aav5.csv (737 588 séquences) — PAS les parties 1/3/4 (repeatability
+│   │   │                                #   + recherche aléatoire, ~11 min à elle seule sur aav9, pas rejouée deux fois de
+│   │   │                                #   plus) ; mêmes hyperparamètres baseline fixes (mu=50/T_viab=0.8/noise_viab=0.5/
+│   │   │                                #   D=1e9) que aav9, non re-tunés par dataset, donc D/d0 (reads/séquence) diffère
+│   │   │                                #   fortement entre les 3 notebooks vu les tailles de librairie très différentes.
+│   │   │                                #   F_viab/J_viab chargés directement via np.load (pas de load_F_viab_aavX_mlp()
+│   │   │                                #   générique dans initialize_weights.py, module spécifique à aav9 par design).
+│   │   │                                #   Différence notable repérée : contrairement à aav9.csv, aav2.csv/aav5.csv ont
+│   │   │                                #   une colonne `error` RÉELLE (variable par séquence, pas une constante 0.1) et
+│   │   │                                #   des colonnes de comptages bruts plasmid/vector(1/2) — potentiellement de quoi
+│   │   │                                #   calibrer le bruit réel plus directement que pour aav9 (non exploité dans ces
+│   │   │                                #   deux notebooks, qui ne font que rejouer 5-7 à l'identique — piste ouverte).
+│   │   ├── reproductibility/            # log_enrichment_histograms.ipynb (2026-08-26) : lit fit4functionaav9.csv
+│   │   │                                #   (gitignoré, 74 464 lignes, colonnes Production1/Production2/Production =
+│   │   │                                #   deux réplicats de production + moyenne, ratios de fold-enrichment BRUTS pas
+│   │   │                                #   encore log-transformés) ; convertit chaque réplicat en log2 enrichment
+│   │   │                                #   (log2(Production1), log2(Production2)) et trace les deux histogrammes
+│   │   │                                #   (overlay + côte à côte) pour comparer la reproductibilité entre Production1
+│   │   │                                #   et Production2. ~17% des lignes par colonne sont droppées (valeurs 0/inf/NaN,
+│   │   │                                #   log2 indéfini) — fraction reportée explicitement plutôt que silencieusement
+│   │   │                                #   ignorée.
+│   │   │                                # ProfileMLP_train_Production1_test_Production2.ipynb (2026-08-26) : check de
+│   │   │                                #   généralisation cross-réplicat -- même ProfileMLP/boucle d'entraînement que
+│   │   │                                #   aav_viability_test/AAV9_profile_model.ipynb, entraîné sur 20% des variants
+│   │   │                                #   (log2(Production1) comme cible) et testé sur les 80% restants MAIS avec
+│   │   │                                #   log2(Production2) comme cible de test (pas Production1) -- teste si le
+│   │   │                                #   signal appris généralise au-delà du bruit de réplicat propre à Production1.
+│   │   │                                #   Ne garde que les lignes où Production1 ET Production2 sont valides
+│   │   │                                #   simultanément (54 621/74 464, 73.4%) pour que le split 20/80 porte sur les
+│   │   │                                #   mêmes variants physiques des deux côtés. `r_replicate_ceiling` (Pearson r
+│   │   │                                #   entre log2(Production1) et log2(Production2) sur les lignes de test) sert
+│   │   │                                #   de plafond de comparaison : r(MLP, Production2)=0.83 approche mais ne
+│   │   │                                #   dépasse pas r(Production1, Production2)=0.89 sur ce même split.
+│   │   │                                # ProfileMLP_train40_Production1_test60_Production2.ipynb (2026-08-26) :
+│   │   │                                #   même notebook mais split 40% train / 60% test (au lieu de 20/80) — avec
+│   │   │                                #   plus de données d'entraînement, r(MLP, Production2)=0.86 se rapproche
+│   │   │                                #   encore plus du plafond r(Production1, Production2)=0.89 (quasi identique
+│   │   │                                #   au split 20/80, la fraction Production1/Production2 valide simultanément
+│   │   │                                #   ne dépend pas du split).
+│   │   │                                # new_variant_appearance_analysis.ipynb (2026-08-26) : autre source de bruit
+│   │   │                                #   candidate (indépendante du cross-packaging, cf. lib/cross_packaging_draft.py) —
+│   │   │                                #   CodonRep1/CodonRep2 sont 2 constructions ADN indépendantes du même variant AA
+│   │   │                                #   désigné, mesurées chacune une fois (Production1/Production2). Repère les lignes
+│   │   │                                #   où une réplique est à zéro pile (aucun read vecteur détecté) alors que l'autre
+│   │   │                                #   est nettement dans le mode "fit" (seuil = vallée entre les 2 modes de
+│   │   │                                #   l'histogramme à bins de log2(Production1), find_peaks sur les comptages binnés
+│   │   │                                #   — PAS de KDE, cf. consigne permanente utilisateur 2026-08-26 "jamais de KDE,
+│   │   │                                #   toujours des bins") : 69/74 464 lignes (0.093%), 100% dépassent le p99 de
+│   │   │                                #   désaccord normal entre répliques (mesuré sur les lignes où les deux répliques
+│   │   │                                #   sont valides) — donc pas de simple bruit d'échantillonnage. Hypothèse (non
+│   │   │                                #   confirmable depuis ce CSV — CodonRep1/2 ne contiennent que la séquence
+│   │   │                                #   DESIGNED, pas la séquence réellement observée) : une erreur PCR/synthèse a
+│   │   │                                #   changé l'ADN réel d'une seule des 2 constructions, qui cesse silencieusement de
+│   │   │                                #   représenter le variant AA désigné. Liste des 69 lignes triées par magnitude
+│   │   │                                #   affichée (section 5) — assez peu nombreuses pour être simplement exclues de
+│   │   │                                #   l'entraînement en l'état, pas encore de terme dédié dans sequence_classesV1.py.
+│   │   │                                #   Section 4 (scatter) annote aussi le nombre de variants sur chacune des 2 lignes
+│   │   │                                #   de pile-up au pseudocount (log2(1e-3)≈-9.97, PAS seulement les discordants) :
+│   │   │                                #   12 680 sur la ligne Production1=0 (17.0%), 12 805 sur Production2=0 (17.2%),
+│   │   │                                #   5 664 sur les deux à la fois.
 │   │   ├── mlp_regression/              # expériences de recouvrement MLP (DEEPMLP, ProfileMLP_recovery_nnx, ...)
 │   │   │   └── claude_variants/         # variantes exploratoires assistées par IA des mêmes expériences
 │   │   └── deeper_mlp/                  # diversity_sweep_deeper_mlp.ipynb : proche de diversity_sweep.ipynb mais PAS
