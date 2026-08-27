@@ -91,12 +91,3 @@ Directed-Evolution-loop/
    keyed by hyperparameters but not by which GT (`F_viab`/`J_viab`) produced them — if you
    swap the GT source again, delete the stale `diversity*.csv` files for any notebook you
    plan to re-run, otherwise it will silently reload the old GT's cached results.
-
-## Next tasks
-
-- modelize the pair-interactions between acido-amines. Pott's model ✅
-- model (Ridge regression) to fit the scores for each sequence (first for the linear model) ✅
-- Poisson regression to better fit the weights
-- model to fit the weights for the Pott's model ✅ (joint ridge regression directly on real
-  aav9.csv, `RegressionV1.fit_weights_potts_from_data` / `AAV9_potts_regression.ipynb`; now the
-  project's default AAV9 GT)

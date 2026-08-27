@@ -316,7 +316,13 @@ Directed-Evolution-loop/
 │   │   │                                #   (nouveau, à côté de `load_F_viab_aav9_mlp`/`load_J_viab_aav9_mlp` — PAS un
 │   │   │                                #   remplacement, aucun notebook existant n'a changé d'import ; devenir la GT
 │   │   │                                #   par défaut impliquerait de re-caler mu/T_viab/noise_viab/D dans
-│   │   │                                #   AAV9_fitting_protocol.ipynb, pas fait ici).
+│   │   │                                #   AAV9_fitting_protocol.ipynb, pas fait ici). Section 5b ajoutée après coup :
+│   │   │                                #   sensibilité au choix de lambda — refit F/J (données complètes) aux 5 lambdas
+│   │   │                                #   de la grille CV dont le MSE est le plus proche du minimum (23.95, MSE=4.703),
+│   │   │                                #   histogrammes superposés du score GT résultant. Résultat rassurant : les 5
+│   │   │                                #   candidats (11.7 à 30.4, tous à <0.5% du MSE minimum) donnent des scores GT
+│   │   │                                #   quasi identiques (r≥0.9996 vs le lambda choisi) — le GT n'est pas sensible au
+│   │   │                                #   choix précis du lambda dans la zone plate du MSE de CV.
 │   │   │                                # AAV9_potts_GT_score_study.ipynb (2026-08-27) : rejoue l'étude de score GT
 │   │   │                                #   d'AAV9_fitting_protocol.ipynb (section 2b : distribution du score GT
 │   │   │                                #   déterministe ; sections 5-6 : log enrichment simulé par le Protocol vs
@@ -339,6 +345,38 @@ Directed-Evolution-loop/
 │   │   │                                #   section 4e) — un seul tirage stochastique (pas de moyenne sur plusieurs
 │   │   │                                #   répétitions comme la partie 1 d'AAV9_fitting_protocol.ipynb), donc à
 │   │   │                                #   confirmer sur plusieurs runs avant d'y voir plus qu'un seul point de mesure.
+│   │   │                                # AAV9_potts_GT_fitting_protocol.ipynb (2026-08-27) : rejoue les parties 5
+│   │   │                                #   (playground manuel), 6 (overlay score GT vs log enrichment simulé) et 7
+│   │   │                                #   (ProfileMLP sur 25 000 variants réels, recovery held-out) d'
+│   │   │                                #   AAV9_fitting_protocol.ipynb, même numérotation de sections que les siblings
+│   │   │                                #   AAV2/AAV5_fitting_protocol.ipynb (qui rejouent ces mêmes sections pour un
+│   │   │                                #   autre dataset AAV, ici c'est le même aav9.csv mais une autre GT) — F_potts/
+│   │   │                                #   J_potts au lieu de la GT naïve, mêmes hyperparamètres baseline
+│   │   │                                #   (mu=50/T_viab=0.8/noise_viab=0.5/D=1e9/RHO_REF=1e-3). Version plus complète
+│   │   │                                #   qu'AAV9_potts_GT_score_study.ipynb (sections 2/2b/5/6 seulement, pas de
+│   │   │                                #   partie 7) : ajoute la partie 7 (ProfileMLP, indépendante du choix de GT,
+│   │   │                                #   incluse pour compléter le parallèle avec AAV9_fitting_protocol.ipynb) et une
+│   │   │                                #   section 5a nouvelle — tableaux DataFrame de taille de population à chaque
+│   │   │                                #   checkpoint du Protocol (lambda0/0p/2/2p/3/3p/4), réutilisant
+│   │   │                                #   analysisV1.number_of_seq_threshold/proportion_above_threshold (déjà dans le
+│   │   │                                #   projet, pas réinventés) : total, nombre de variants détectés (count>=1), et
+│   │   │                                #   nombre de variants au-dessus de seuils de comptage/abondance relative.
+│   │   │                                #   Résultat notable : lambda2p/lambda3p (checkpoints NGS post-viability/
+│   │   │                                #   sélectivité) ne détectent que 55 713/68 776 (81.0%) des variants réels à
+│   │   │                                #   D=1e9 reads — l'essentiel de l'attrition de la librairie vient de la
+│   │   │                                #   profondeur de séquençage, pas de la sélection biologique elle-même
+│   │   │                                #   (lambda2/lambda3 avant NGS gardent >99.8% des variants détectables). Partie
+│   │   │                                #   8 ajoutée après coup : cross-packaging (ProtocolCrossPackagingBackground,
+│   │   │                                #   lib/cross_packaging_draft.py, cross_packaging_rate=0.05) comparé au baseline,
+│   │   │                                #   même GT/hyperparamètres — r(sim,real) 0.895 (baseline) vs 0.887
+│   │   │                                #   (cross-packaging), r(sim,GT) 0.971 vs 0.958. L'hallucination
+│   │   │                                #   (ProtocolWithHallucination) a été délibérément exclue de cette section pour
+│   │   │                                #   l'instant : le HALLUCINATION_RATE actuellement dans
+│   │   │                                #   AAV9_cross_packaging_and_hallucination_impact.ipynb (0.17) ne correspond plus
+│   │   │                                #   au taux empirique documenté ailleurs dans le projet (69/74464 ≈ 0.09 %, cf.
+│   │   │                                #   new_variant_appearance_analysis.ipynb) et donne un impact largement plus
+│   │   │                                #   important (r chute à 0.717 avec ce taux, testé puis retiré) — à corriger/
+│   │   │                                #   recalibrer avant de la réintégrer (décision utilisateur 2026-08-27).
 │   │   ├── reproducibility/             # (renommé 2026-08-27, corrige la coquille "reproductibility") fit4functionaav9.csv
 │   │   │                                #   maintenant publié sur la release GitHub aav-raw-ngs-data-v1 (cf. README) —
 │   │   │                                #   gitignoré comme les autres CSV sources, plus le seul CSV source sans mécanisme
