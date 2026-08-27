@@ -1,4 +1,20 @@
 import jax
+# Must run before any JAX array/computation -- jax.random.poisson defaults to int32 output,
+# which silently CLAMPS (not errors) at 2**31-1 for any rate parameter above it, rather than
+# sampling correctly. That ceiling is reachable in practice: produce_capsids()'s rate is
+# alpha * exp(score / T_viab) * (per-cell noise sum), and a low T_viab or large-magnitude
+# F_viab/J_viab pushes exp(score / T_viab) up fast enough that MANY different sequences'
+# true (and very different) rates all collapse onto the exact same clamped int32 ceiling --
+# observed directly on real aav9 data (57.5% of sequences clamped identically) with squared
+# F_viab/J_viab weights in AAV9_fitting_protocol.ipynb's manual-exploration cell, turning what
+# should be a continuous gradient among viable variants into a single spike. Enabling x64
+# makes jax.random.poisson default to int64 (ceiling ~9.2e18 instead of ~2.1e9) and lets
+# jnp.exp() work in float64 (avoiding a separate float32-overflow-to-inf failure mode, where
+# jax.random.poisson(inf) silently returns 0 instead of a large count). Project-wide cost:
+# every float/int JAX array defaults to 64-bit unless explicitly cast down, roughly doubling
+# memory for large pools (e.g. the mu_HEK/diversity sweep notebooks' d0 up to 200,000) -- a
+# real tradeoff, not free correctness.
+jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
 import numpy as np
 from tqdm.auto import tqdm
@@ -217,9 +233,17 @@ class Protocol():
         return subkey
     
     def compute_score(self, F, J) -> jax.Array:
-        """ 
-        Compute scores according the type of model
         """
+        Compute scores according the type of model
+
+        F/J are cast to float64 up front regardless of their input dtype: callers often pass
+        float32 arrays (e.g. F_viab/J_viab .npy files saved before jax_enable_x64 existed in
+        this file), and JAX does not auto-promote an existing float32 array through downstream
+        ops just because jax_enable_x64 is on globally -- without this cast, exp(score /
+        T_viab) in produce_capsids()/selectivity() can still silently overflow to inf in
+        float32 (jax.random.poisson(inf) then silently returns 0) even with x64 enabled.
+        """
+        F, J = jnp.asarray(F, dtype=jnp.float64), jnp.asarray(J, dtype=jnp.float64)
         if self.model == "Potts":
             scores = jnp.sum(F[self.sequence, jnp.arange(7)], axis =1)
             for i in range(7):

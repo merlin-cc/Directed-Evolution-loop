@@ -1,9 +1,22 @@
 """
-Loads F_viab/J_viab from the AAV9 notebook's ProfileMLP recovery (`F_mlp`/`J_mlp` in
-AAV9_profile_model.ipynb, sections 3 and 3b) instead of the purely synthetic
-`initialize_random_weights` in sequence_classesV1.py -- so a Protocol/ProtocolV2 simulation
-can be seeded with weights that reflect the REAL AAV9 capsid data, instead of arbitrary
-random ones.
+Loads F_viab/J_viab from the AAV9 notebook's credible GT (`F_viab_GT`/`J_naive_final` in
+AAV9_profile_model.ipynb, section 3c: naive per-cell group-means, `J` shrunk cell-by-cell
+toward 0 by empirical-Bayes/James-Stein on its own sampling standard error) instead of the
+purely synthetic `initialize_random_weights` in sequence_classesV1.py -- so a
+Protocol/ProtocolV2 simulation can be seeded with weights that reflect the REAL AAV9 capsid
+data, instead of arbitrary random ones.
+
+(2026-08-27: `load_F_viab_aav9_mlp`/`load_J_viab_aav9_mlp`'s names/docstrings used to say
+these came from the ProfileMLP's mutant-scan recovery (`F_mlp`/`J_mlp`, sections 3/3b) --
+that was already stale by the time section 3c was added: the notebook's actual export cell
+(section "Export F_viab and J_viab") saves `F_viab_GT`/`J_naive_final` instead, explicitly
+NOT model-derived, since an MLP-probed `J` can extrapolate into (i, j, a, b) combinations
+barely seen in the real data. Docstrings fixed here to match; filenames
+(`aav9_F_viab_mlp.npy`) left as-is to avoid a filename migration across every caller.
+See also `load_F_viab_aav9_potts`/`load_J_viab_aav9_potts` below for an alternative GT --
+a single joint ridge (Potts) regression fit directly on aav9.csv, from
+`aav_viability_test/AAV9_potts_regression.ipynb` -- kept side by side with this one for
+comparison, not yet the default anywhere.)
 
 Also builds F_sel/J_sel to go alongside that real F_viab/J_viab, in three flavors that trade
 off how much F_sel/J_sel's own trend (which amino acid works where) resembles F_viab/J_viab's:
@@ -30,21 +43,24 @@ message = "File version 1.1"
 AAV9_F_VIAB_PATH = os.path.join(_HERE, "aav9_F_viab_mlp.npy")
 AAV9_J_VIAB_PATH = os.path.join(_HERE, "aav9_J_viab_mlp.npy")
 
+AAV9_F_VIAB_POTTS_PATH = os.path.join(_HERE, "aav9_F_viab_potts.npy")
+AAV9_J_VIAB_POTTS_PATH = os.path.join(_HERE, "aav9_J_viab_potts.npy")
+
 NUM_AMINO_ACIDS = 20
 NUM_POSITIONS   = 7
 
 
 def load_F_viab_aav9_mlp(path=AAV9_F_VIAB_PATH):
     """
-    Loads the (num_amino_acids=20, num_positions=7) viability profile recovered by
-    ProfileMLP's single-mutant scan on the real AAV9 dataset -- same array as `F_mlp` in
-    AAV9_profile_model.ipynb ('Modelization_V1/MLP_regression/AAV_viability_test/'), section 3.
+    Loads the (num_amino_acids=20, num_positions=7) viability profile from AAV9_profile_model.ipynb's
+    credible GT (section 3c: `F_viab_GT`, a plain per-cell group-mean of real AAV9 target --
+    NOT ProfileMLP-derived, despite this function's name; see the module docstring above).
     """
     if not os.path.exists(path):
         raise FileNotFoundError(
             f"{path} not found -- run AAV9_profile_model.ipynb's export cell first "
-            f"('Modelization_V1/MLP_regression/AAV_viability_test/AAV9_profile_model.ipynb', "
-            f"section 3b, right after `F_mlp_fj, J_mlp = extract_effective_FJ_mlp(...)`)."
+            f"('Modelization_V1/notebooks/aav_viability_test/AAV9_profile_model.ipynb', "
+            f"section 'Export F_viab and J_viab', right after section 3c)."
         )
     F_viab = np.load(path)
     expected_shape = (NUM_AMINO_ACIDS, NUM_POSITIONS)
@@ -56,16 +72,58 @@ def load_F_viab_aav9_mlp(path=AAV9_F_VIAB_PATH):
 def load_J_viab_aav9_mlp(path=AAV9_J_VIAB_PATH):
     """
     Loads the (num_positions=7, num_positions=7, num_amino_acids=20, num_amino_acids=20)
-    pairwise coupling recovered by ProfileMLP's double-mutant scan on the real AAV9 dataset
-    -- same array as `J_mlp` in AAV9_profile_model.ipynb, section 3b, with the diagonal
-    (i == j, undefined "self interaction") zeroed out at export time, matching
-    sequence_classesV1.build_J's convention (Protocol's J tensors are never NaN).
+    pairwise coupling from AAV9_profile_model.ipynb's credible GT (section 3c: `J_naive_final`
+    -- naive per-cell group-means, shrunk cell-by-cell toward 0 by empirical-Bayes/James-Stein
+    -- NOT ProfileMLP-derived, despite this function's name; see the module docstring above),
+    with the diagonal (i == j, undefined "self interaction") zeroed out at export time,
+    matching sequence_classesV1.build_J's convention (Protocol's J tensors are never NaN).
     """
     if not os.path.exists(path):
         raise FileNotFoundError(
             f"{path} not found -- run AAV9_profile_model.ipynb's export cell first "
-            f"('Modelization_V1/MLP_regression/AAV_viability_test/AAV9_profile_model.ipynb', "
-            f"section 3b, right after `F_mlp_fj, J_mlp = extract_effective_FJ_mlp(...)`)."
+            f"('Modelization_V1/notebooks/aav_viability_test/AAV9_profile_model.ipynb', "
+            f"section 'Export F_viab and J_viab', right after section 3c)."
+        )
+    J_viab = np.load(path)
+    expected_shape = (NUM_POSITIONS, NUM_POSITIONS, NUM_AMINO_ACIDS, NUM_AMINO_ACIDS)
+    if J_viab.shape != expected_shape:
+        raise ValueError(f"expected J_viab shape {expected_shape}, got {J_viab.shape}")
+    return jnp.asarray(J_viab)
+
+
+def load_F_viab_aav9_potts(path=AAV9_F_VIAB_POTTS_PATH):
+    """
+    Loads the (num_amino_acids=20, num_positions=7) viability profile from a single joint,
+    ridge-regularized Potts regression fit directly on real aav9.csv -- `F_potts` in
+    aav_viability_test/AAV9_potts_regression.ipynb, via RegressionV1.fit_weights_potts_from_data.
+    Alternative to load_F_viab_aav9_mlp's naive group-means GT (see that function's docstring
+    and the module docstring above for how the two differ) -- not the default anywhere yet.
+    """
+    if not os.path.exists(path):
+        raise FileNotFoundError(
+            f"{path} not found -- run AAV9_potts_regression.ipynb's export cell first "
+            f"('Modelization_V1/notebooks/aav_viability_test/AAV9_potts_regression.ipynb', "
+            f"section 'Export F_viab_potts / J_viab_potts')."
+        )
+    F_viab = np.load(path)
+    expected_shape = (NUM_AMINO_ACIDS, NUM_POSITIONS)
+    if F_viab.shape != expected_shape:
+        raise ValueError(f"expected F_viab shape {expected_shape}, got {F_viab.shape}")
+    return jnp.asarray(F_viab)
+
+
+def load_J_viab_aav9_potts(path=AAV9_J_VIAB_POTTS_PATH):
+    """
+    Loads the (num_positions=7, num_positions=7, num_amino_acids=20, num_amino_acids=20)
+    pairwise coupling from the same joint Potts regression as load_F_viab_aav9_potts --
+    `J_potts` in aav_viability_test/AAV9_potts_regression.ipynb -- diagonal (i == j) zeroed,
+    matching sequence_classesV1.build_J's convention.
+    """
+    if not os.path.exists(path):
+        raise FileNotFoundError(
+            f"{path} not found -- run AAV9_potts_regression.ipynb's export cell first "
+            f"('Modelization_V1/notebooks/aav_viability_test/AAV9_potts_regression.ipynb', "
+            f"section 'Export F_viab_potts / J_viab_potts')."
         )
     J_viab = np.load(path)
     expected_shape = (NUM_POSITIONS, NUM_POSITIONS, NUM_AMINO_ACIDS, NUM_AMINO_ACIDS)

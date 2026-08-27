@@ -21,7 +21,9 @@ Directed-Evolution-loop/
 │   ├── lib/                             # modules partagés, importés "bare" par tous les notebooks
 │   │   ├── sequence_classesV1.py        # moteur de simulation : Protocol/ProtocolV2/ProtocolV3, initialize_random_weights
 │   │   ├── analysisV1.py                # helpers d'analyse/plot : pearson, precision_at_k, plot_teacher_weights, ...
-│   │   ├── RegressionV1.py              # construction de datasets pour ridge regression
+│   │   ├── RegressionV1.py              # régression de Potts ridge-régularisée (F+J jointe) : sur NGS simulé
+│   │   │                                #   (recover_weights_from_NGS) ou directement sur des données réelles
+│   │   │                                #   (fit_weights_potts_from_data, cf. AAV9_potts_regression.ipynb)
 │   │   ├── initialize_weights.py        # charge F_viab/J_viab AAV9 réels, construit F_sel/J_sel corrélés/anticorrélés/indép.
 │   │   ├── MLP_regV1.py                 # tentative MLP profile-only, abandonnée
 │   │   ├── aav9_{F,J}_viab_mlp.npy      # gitignorés — artefacts dérivés, régénérés via AAV9_profile_model.ipynb
@@ -41,21 +43,35 @@ Directed-Evolution-loop/
 │   │                                    #   un plancher non-nul à toutes les séquences au lieu de 99% à zéro).
 │   │                                    #   Médiane plutôt que moyenne : la moyenne est tirée vers le haut par les
 │   │                                    #   quelques séquences à score extrême (vérifié empiriquement, ~5x l'écart).
-│   │                                    #   ProtocolCrossPackagingMechanistic : pool de cellules physiques partagé,
-│   │                                    #   mais PAS tractable à l'échelle N1 du projet (jusqu'à ~1e10 dans certains
-│   │                                    #   sweeps) — plafonnée à MAX_MECHANISTIC_CELLS=5M, lève une erreur au-delà ;
-│   │                                    #   gardée comme esquisse de la structure du problème, PAS fonctionnelle en
-│   │                                    #   l'état (chaque cellule n'a qu'un seul occupant — la redistribution
-│   │                                    #   multi-occupants, cœur du cross-packaging, reste un TODO).
-│   ├── notebooks/
-│   │   ├── analysis of correlation/     # F_permutation_recovery_correlation.ipynb : F_viab AAV9 réel, J_viab=J_sel=0
-│   │   │                                #   (pas d'épistasie pour ce premier passage) ; F_sel = 10 permutations des
-│   │   │                                #   lignes (axe acide aminé) de F_viab (une par clé jax), corrélation GT
-│   │   │                                #   avec F_viab mesurée ; pool de séquences + split train/val/test fixes
-│   │   │                                #   pour les 10 runs ; un ProfileMLP entraîné par permutation sur le log
-│   │   │                                #   enrichment de sélectivité (target2), F_sel_hat recouvré par scan
-│   │   │                                #   single-mutant, comparé au F_sel vrai de ce run
-│   │   ├── analysis of parameters for viability/  # Protocol_parameters_and_first_classic_use.ipynb ; mu_HEK_multiplicity_sweep.ipynb
+│   │                                    #   (note : une 1ère esquisse ProtocolCrossPackagingMechanistic — pool de
+│   │                                    #   cellules physiques partagé, pas tractable à l'échelle N1 du projet — a été
+│   │                                    #   retirée du fichier depuis, cf. historique git). Ajout (2026-08-26) d'une
+│   │                                    #   3e source de bruit, DISTINCTE du cross-packaging (agit sur la mesure NGS,
+│   │                                    #   pas sur la production) : LambdaWithHallucination (sous-classe de Lambda)
+│   │                                    #   + ProtocolWithHallucination (sous-classe de ProtocolV3, branche
+│   │                                    #   LambdaWithHallucination dans _ngs_and_deplete() à chaque checkpoint NGS).
+│   │                                    #   Modélise l'apparition de nouveaux variants repérée dans
+│   │                                    #   new_variant_appearance_analysis.ipynb (erreur PCR/synthèse qui fait
+│   │                                    #   dériver l'ADN réel d'une construction loin de la séquence désignée) :
+│   │                                    #   attributs `hallucination` (bool, défaut False) et `hallucination_rate`
+│   │                                    #   (défaut 69/74464≈0.000927, la fraction empirique mesurée dans ce
+│   │                                    #   notebook), réglables après construction comme `multinomialNGS`
+│   │                                    #   (`lambda_obj.hallucination = True`). sequence_reads() ajoute
+│   │                                    #   Poisson(D/d0) reads à chaque séquence tirée Bernoulli(hallucination_rate),
+│   │                                    #   indépendamment de son abondance réelle — la déplétion reste basée sur les
+│   │                                    #   molécules réellement pipettées, pas sur les reads hallucinés. Testée
+│   │                                    #   manuellement via un round complet de loop_DE (poids construits à la main,
+│   │                                    #   PAS via initialize_random_weights() — cf. note ci-dessous). Complétée
+│   │                                    #   (2026-08-26) par `ProtocolCrossPackagingAndHallucination` (hérite des deux
+│   │                                    #   `ProtocolCrossPackagingBackground` + `ProtocolWithHallucination` à la fois,
+│   │                                    #   héritage multiple coopératif sans conflit — chaque classe redéfinit une
+│   │                                    #   étape différente du pipeline) ; utilisée dans
+│   │                                    #   `aav_viability_test/AAV9_cross_packaging_and_hallucination_impact.ipynb`.
+│   ├── notebooks/                       # (réorganisé 2026-08-27 : "analysis of correlation"/"analysis of
+│   │                                    #   parameters for viability"/deeper_mlp fusionnés dans
+│   │                                    #   viability_parameter_sweeps/ ; "reproductibility" corrigé en
+│   │                                    #   reproducibility/ ; plus aucun nom de dossier avec espace)
+│   │   ├── viability_parameter_sweeps/  # Protocol_parameters_and_first_classic_use.ipynb ; mu_HEK_multiplicity_sweep.ipynb
 │   │   │                                #   (mu = rho*N1/d0, HEK cells transfectées/séquence) : sweep de mu (F_viab/J_viab AAV9
 │   │   │                                #   réel, F_sel/J_sel permutés, pool fixe 20k) ; sections 1-6 corrélation GT vs target1 ;
 │   │   │                                #   section 7 ajoute un ProfileMLP entraîné sur un split train/test du pool, recovery du
@@ -124,15 +140,67 @@ Directed-Evolution-loop/
 │   │   │                                #   20k/30k/200k selon le fichier) ; seuls diversity_sweep.ipynb/diversity_sweep_adaptive_D.ipynb/
 │   │   │                                #   diversity_sweep_deeper_mlp.ipynb ont été mis à jour séparément vers mu=10/N0=150*N1
 │   │   │                                #   (cf. "État actuel" 2026-08-24) — la base harmonisée n'existe que dans ce nouveau fichier
+│   │   │                                # (déplacé ici 2026-08-27, ex-"analysis of correlation/") F_permutation_recovery_correlation.ipynb :
+│   │   │                                #   F_viab AAV9 réel, J_viab=J_sel=0 (pas d'épistasie pour ce premier passage) ; F_sel = 10
+│   │   │                                #   permutations des lignes (axe acide aminé) de F_viab (une par clé jax), corrélation GT avec
+│   │   │                                #   F_viab mesurée ; pool de séquences + split train/val/test fixes pour les 10 runs ; un
+│   │   │                                #   ProfileMLP entraîné par permutation sur le log enrichment de sélectivité (target2), F_sel_hat
+│   │   │                                #   recouvré par scan single-mutant, comparé au F_sel vrai de ce run
+│   │   │                                # (déplacé ici 2026-08-27, ex-deeper_mlp/) diversity_sweep_deeper_mlp.ipynb : proche de
+│   │   │                                #   diversity_sweep.ipynb mais PAS identique — mu=10/rho=1e-4/N0=150*N1 alignés, mais D=5e8 fixe
+│   │   │                                #   (pas 1e8) et noise_viab=3 (pas 0.5, écart non résolu — cf. "État actuel") ; grille d0 propre
+│   │   │                                #   200 à 200k (sur-ensemble du 5k-200k de diversity_sweep.ipynb côté petit d0) mais compare
+│   │   │                                #   CETTE FOIS deux architectures entraînées sur les mêmes données : ShallowProfileMLP (~27k
+│   │   │                                #   params, l'archi standard du projet, juste renommée) vs DeepProfileMLP (~90k params, nouveau)
+│   │   │                                #   — embedding par position partagé (Linear 20->16 + GELU) moyenné (avg pool) sur les 7
+│   │   │                                #   positions pour la branche "profile", + branche pairwise (MLP sur les 21 paires de positions
+│   │   │                                #   concaténées, avg pool) plus expressive que le BilinearHead déjà testé (et jugé marginal) dans
+│   │   │                                #   MLP_bilinear_head_anticorrelated.ipynb, + tête dense à 4 couches (256-128-64-32) au lieu de 2 ;
+│   │   │                                #   même batch_size adaptatif pour isoler l'architecture comme seule variable ; inclut les mêmes
+│   │   │                                #   diagnostics d'entraînement (best_epoch/total_steps/val_mse) que diversity_sweep.ipynb pour
+│   │   │                                #   vérifier si le modèle profond profite réellement de plus de gradient steps, pas seulement de
+│   │   │                                #   plus de capacité. Recovery top-1000 comparée sur le pool d'éval fixe avec DEUX références
+│   │   │                                #   GT<->protocole : profondeur fixe (constante ~93%, section 4) et profondeur APPARIÉE
+│   │   │                                #   (D_eval_matched = D_FIXED/d0 * 50 000, ré-simulée à chaque d0 — le vrai point de comparaison
+│   │   │                                #   "juste", puisque les labels d'entraînement du MLP sont eux-mêmes à cette profondeur
+│   │   │                                #   D_FIXED/d0, pas à la profondeur fixe du pool d'éval) ; graphe recovery sur le split interne au
+│   │   │                                #   sweep supprimé (sa taille dépend de d0, donc pas comparable d'un point à l'autre)
+│   │   │                                # GT basculée vers Potts (2026-08-27, cf. "État actuel") sur les 10 notebooks de cette
+│   │   │                                #   section (aucun exclu — AAV9_fitting_protocol.ipynb, seul notebook non basculé du projet,
+│   │   │                                #   est dans aav_viability_test/, pas ici) ; sorties de cellules effacées, caches
+│   │   │                                #   diversity*.csv obsolètes supprimés, à ré-exécuter avant de faire confiance à un chiffre
+│   │   │                                #   affiché. Caveat particulier sur mu_HEK_multiplicity_sweep.ipynb/unified_parameter_sweep.ipynb :
+│   │   │                                #   tous deux réutilisent le point de fonctionnement "réaliste" (mu=50/T_viab=0.8/noise_viab=0.5/
+│   │   │                                #   D=1e9) dérivé dans AAV9_fitting_protocol.ipynb CONTRE L'ANCIENNE GT — ce point de
+│   │   │                                #   fonctionnement n'a pas été re-dérivé contre la GT Potts (choix utilisateur, cf. plus bas).
 │   │   ├── directed_evolution_loop/     # DE_loopV1.ipynb — boucle de simulation d'évolution dirigée bout-en-bout
 │   │   ├── selectivity_weight_regimes/  # trio F_sel/J_sel corrélé/anticorrélé/indépendant + variantes (bilinear head,
 │   │   │                                #   double mutant designed, profile-only) + CSV de diversité mis en cache
-│   │   │                                #   MLP_viability_noise_denoising.ipynb : viabilité SEULE (GT F_viab/J_viab
-│   │   │                                #   régularisé), sweep de noise_viab à pool de séquences fixe pour tester si
-│   │   │                                #   le MLP débruite (corrélation prédiction vs score vrai vs. label NGS brut)
+│   │   │                                #   MLP_viability_noise_denoising20K.ipynb / MLP_viability_noise_denoising50K.ipynb
+│   │   │                                #   (2 fichiers, pas 1 — pool de 20k/50k séquences respectivement) : viabilité
+│   │   │                                #   SEULE (GT F_viab/J_viab régularisé), sweep de noise_viab à pool de séquences
+│   │   │                                #   fixe pour tester si le MLP débruite (corrélation prédiction vs score vrai vs.
+│   │   │                                #   label NGS brut)
+│   │   │                                # GT basculée vers Potts (2026-08-27, cf. "État actuel") sur les 11 notebooks de
+│   │   │                                #   ce dossier qui chargent F_viab/J_viab AAV9 (les 2 ci-dessus + cheated_library_MLP/
+│   │   │                                #   initialize_weights_playground/MLP_bilinear_head_anticorrelated/MLP_designed_double_
+│   │   │                                #   mutant_sampling/MLP_for_{anti,}correlated_weights/MLP_for_independent_weights/
+│   │   │                                #   MLP_for_profile_only_weights/plotting_realistic_weights.ipynb) — sorties de
+│   │   │                                #   cellules effacées, caches diversity*.csv obsolètes supprimés (dont le dossier
+│   │   │                                #   `_stale_true_lambda_csv_backup/` laissé tel quel, déjà marqué obsolète avant ce
+│   │   │                                #   changement), à ré-exécuter avant de faire confiance à un chiffre affiché. Plusieurs
+│   │   │                                #   de ces notebooks citent en prose des chiffres précis (magnitudes, percentiles)
+│   │   │                                #   calculés sous l'ANCIENNE GT — pas corrigés dans le texte, seulement dans le code.
 │   │   ├── aav_viability_test/          # AAV{2,5,9}_profile_model.ipynb (entraîne ProfileMLP sur données réelles),
 │   │   │                                #   AAV_MLP_weights_recovery.ipynb, checks de recouvrement d'erreur/top500
-│   │   │                                # AAV9_fitting_protocol.ipynb (2026-08-25) : calibre les hyperparamètres du
+│   │   │                                # AAV9_fitting_protocol.ipynb (2026-08-25) : SEUL notebook du projet volontairement
+│   │   │                                #   PAS basculé vers la GT Potts (2026-08-27, décision utilisateur) — reste le
+│   │   │                                #   document historique de comment mu/T_viab/noise_viab/D ont été dérivés (via
+│   │   │                                #   recherche contre R_REAL = pearson(target réel, score GT) calculé sous
+│   │   │                                #   l'ANCIENNE GT naïve) ; le retoucher sans re-lancer sa partie 2 laisserait des
+│   │   │                                #   résultats affichés incohérents avec le code. AAV9_potts_GT_score_study.ipynb
+│   │   │                                #   (2026-08-27, cf. plus bas) est son pendant côté GT Potts : réutilise CE MÊME
+│   │   │                                #   point de fonctionnement sans le re-dériver. Calibre les hyperparamètres du
 │   │   │                                #   protocole simulé (mu/T_viab/noise_viab/D) pour imiter la stochasticité du
 │   │   │                                #   VRAI aav9.csv (68 776 séquences), pas juste recouvrer le score GT. Partie 1 :
 │   │   │                                #   5 runs identiques du protocole (même F_viab/J_viab réels AAV9), histogramme
@@ -180,7 +248,101 @@ Directed-Evolution-loop/
 │   │   │                                #   des colonnes de comptages bruts plasmid/vector(1/2) — potentiellement de quoi
 │   │   │                                #   calibrer le bruit réel plus directement que pour aav9 (non exploité dans ces
 │   │   │                                #   deux notebooks, qui ne font que rejouer 5-7 à l'identique — piste ouverte).
-│   │   ├── reproductibility/            # log_enrichment_histograms.ipynb (2026-08-26) : lit fit4functionaav9.csv
+│   │   │                                # AAV9_cross_packaging_and_hallucination_impact.ipynb (2026-08-26) : reprend les
+│   │   │                                #   parties 0-2b (setup, données réelles, poids GT, viab_score_GT, R_REAL) et
+│   │   │                                #   5-6 (playground manuel, target1 simulé vs real target, vs GT) d'
+│   │   │                                #   AAV9_fitting_protocol.ipynb — SANS les parties 1 (repeatability) et 2
+│   │   │                                #   (recherche aléatoire d'hyperparamètres) ni la partie 7 (ProfileMLP sur
+│   │   │                                #   données réelles, indépendante du choix de Protocol). Même config baseline
+│   │   │                                #   (mu=50/T_viab=0.8/noise_viab=0.5/D=1e9) passée à 4 variantes de
+│   │   │                                #   lib/cross_packaging_draft.py : ProtocolV3 nu, ProtocolCrossPackagingBackground
+│   │   │                                #   (cross_packaging_rate=0.05, valeur d'illustration non calibrée),
+│   │   │                                #   ProtocolWithHallucination (hallucination_rate=69/74464, valeur empirique de
+│   │   │                                #   new_variant_appearance_analysis.ipynb), et la nouvelle
+│   │   │                                #   ProtocolCrossPackagingAndHallucination (les deux combinées — héritage multiple
+│   │   │                                #   coopératif sur les 2 classes existantes, aucun conflit car elles redéfinissent
+│   │   │                                #   des étapes différentes du pipeline : produce_capsids() vs _ngs_and_deplete()).
+│   │   │                                #   Résultat : le cross-packaging seul fait descendre r(sim,real) de 0.861 à
+│   │   │                                #   0.854, quasiment pile sur R_REAL=0.853 (le plafond de fidélité de la vraie
+│   │   │                                #   expérience) ; l'hallucination seule a un impact négligeable à son taux
+│   │   │                                #   empirique (0.093%, trop faible pour bouger la métrique à cette échelle) ;
+│   │   │                                #   les deux combinées ≈ cross-packaging seul (hallucination toujours négligeable).
+│   │   │                                #   GT basculée vers Potts (2026-08-27, cf. "État actuel") — sorties de cellules
+│   │   │                                #   effacées, à ré-exécuter ; le chiffre R_REAL=0.853 cité ci-dessus a été calculé
+│   │   │                                #   sous l'ANCIENNE GT, pas mis à jour dans ce texte (mu/T_viab/noise_viab/D restent
+│   │   │                                #   le point de fonctionnement dérivé dans AAV9_fitting_protocol.ipynb contre
+│   │   │                                #   l'ancienne GT, non re-dérivé — cf. plus bas).
+│   │   │                                # AAV9_potts_regression.ipynb (2026-08-27) : remplace le duo "moyennes naïves
+│   │   │                                #   par cellule (F) + résidu naïf par cellule ensuite rétréci indépendamment
+│   │   │                                #   (J, empirique-Bayes/James-Stein, section 3c d'AAV9_profile_model.ipynb)"
+│   │   │                                #   par UN SEUL fit de régression de Potts jointe et ridge-régularisée (F et J
+│   │   │                                #   résolus ensemble, pas F d'abord puis J en résidu) directement sur aav9.csv,
+│   │   │                                #   via `lib/RegressionV1.fit_weights_potts_from_data` (nouvelle fonction,
+│   │   │                                #   ajoutée dans cette même passe — jusqu'ici RegressionV1.py ne fittait que
+│   │   │                                #   sur les lectures NGS multi-round d'un `Protocol` SIMULÉ via
+│   │   │                                #   `recover_weights_from_NGS`, jamais sur des données réelles). Design
+│   │   │                                #   (single-site one-hot + pairwise outer-product + biais, 8 541 features) et
+│   │   │                                #   ridge CV (grille `np.logspace(-1, 2, 30)`, 5-fold) réutilisés tels quels ;
+│   │   │                                #   `sample_weight` optionnel ajouté à `ridge_cv_mse_potts`/`fit_weights_potts`
+│   │   │                                #   (rétrocompatible, `None` par défaut) pour une réutilisation future sur
+│   │   │                                #   aav2.csv/aav5.csv (colonne `error` réelle, contrairement à aav9.csv) — non
+│   │   │                                #   exploité dans ce notebook. Résultats (68 776 séquences, meilleur
+│   │   │                                #   lambda=23.95, ni au plancher ni au plafond de la grille) : design
+│   │   │                                #   rang-déficient même à n > p (7715/8541 — beaucoup de cellules (i,j,a,b)
+│   │   │                                #   jamais co-observées dans la vraie librairie combinatoire), d'où l'intérêt
+│   │   │                                #   réel de la ridge, pas juste une précaution. `F_potts` quasi identique à
+│   │   │                                #   `F_viab_GT` (r=+0.997, F était déjà bien estimé par les group-means, ~490
+│   │   │                                #   séquences de support/cellule) ; `J_potts` diverge plus de `J_naive_final`
+│   │   │                                #   (r=+0.839, exactement là où le group-means séquentiel + shrinkage
+│   │   │                                #   par-cellule est structurellement le plus faible). Test prédictif tenu à
+│   │   │                                #   l'écart (absent jusqu'ici pour la GT naïve — jamais validée par un vrai
+│   │   │                                #   split train/test sur données réelles), même split qu'
+│   │   │                                #   AAV9_profile_model.ipynb (`test_size=0.5, random_state=0`), les deux
+│   │   │                                #   méthodes fittées sur `idx_train` seul : Pearson r sur `idx_test` réel =
+│   │   │                                #   0.7821 (naïve, coupure dure `min_support=5`) vs 0.8467 (Potts
+│   │   │                                #   régression) — nette amélioration de généralisation. Test de crédibilité
+│   │   │                                #   (reprend le diagnostic brute-force de 3c, 2M séquences aléatoires
+│   │   │                                #   uniformes) : nuance importante, PAS une victoire nette dans
+│   │   │                                #   cette direction — le top-500 de la régression Potts s'appuie
+│   │   │                                #   proportionnellement PLUS sur `J_part` que celui de la GT naïve actuelle
+│   │   │                                #   (ratio J_part/F_part moyen du top-500 : 0.885 pour Potts contre 0.148
+│   │   │                                #   pour la GT naïve déjà atténuée à REG_STRENGTH=5) — attendu, puisque le
+│   │   │                                #   lambda choisi par CV optimise la prédiction sur des séquences de la
+│   │   │                                #   distribution réelle, pas la plausibilité d'une extrapolation à des
+│   │   │                                #   combinaisons aléatoires uniformes ; un lambda plus élevé (au prix d'un peu
+│   │   │                                #   de r prédictif) reste à explorer si ce compromis compte pour l'usage en
+│   │   │                                #   aval. Exporte `lib/aav9_F_viab_potts.npy`/`aav9_J_viab_potts.npy`, chargés
+│   │   │                                #   par `initialize_weights.load_F_viab_aav9_potts`/`load_J_viab_aav9_potts`
+│   │   │                                #   (nouveau, à côté de `load_F_viab_aav9_mlp`/`load_J_viab_aav9_mlp` — PAS un
+│   │   │                                #   remplacement, aucun notebook existant n'a changé d'import ; devenir la GT
+│   │   │                                #   par défaut impliquerait de re-caler mu/T_viab/noise_viab/D dans
+│   │   │                                #   AAV9_fitting_protocol.ipynb, pas fait ici).
+│   │   │                                # AAV9_potts_GT_score_study.ipynb (2026-08-27) : rejoue l'étude de score GT
+│   │   │                                #   d'AAV9_fitting_protocol.ipynb (section 2b : distribution du score GT
+│   │   │                                #   déterministe ; sections 5-6 : log enrichment simulé par le Protocol vs
+│   │   │                                #   score GT vs target réel) en remplaçant la source de GT par F_potts/J_potts
+│   │   │                                #   (chargés via les loaders `load_F_viab_aav9_potts`/`load_J_viab_aav9_potts`,
+│   │   │                                #   PAS re-fittés — la régression ridge elle-même reste dans
+│   │   │                                #   AAV9_potts_regression.ipynb), mêmes hyperparamètres baseline
+│   │   │                                #   (mu=50/T_viab=0.8/noise_viab=0.5/D=1e9/RHO_REF=1e-3) que la section 2
+│   │   │                                #   d'AAV9_fitting_protocol.ipynb pour rester comparable. Ajoute aussi une
+│   │   │                                #   section absente ailleurs : quelques `J_potts[i,j]` individuels affichés
+│   │   │                                #   directement (heatmap de force de couplage par paire de positions, puis
+│   │   │                                #   les 4 paires les plus fortes en détail — positions (3,4)/(2,3)/(4,5)/(3,6),
+│   │   │                                #   mean|J| hors-diagonale=0.247, max|J|=4.11). Résultats : score GT déterministe
+│   │   │                                #   (compute_score(F_potts,J_potts) sur les 68 776 séquences réelles, PAS
+│   │   │                                #   held-out — inclut les données d'entraînement de la régression) très corrélé
+│   │   │                                #   au target réel (r=+0.889) ; le log enrichment simulé par le Protocol à ce
+│   │   │                                #   GT l'est encore un peu plus (r=+0.895 vs réel, r=+0.971 vs le score GT
+│   │   │                                #   lui-même) et ne montre AUCUN pic à target1=0 (frac=0.000, contrairement à
+│   │   │                                #   la pathologie diagnostiquée avec la GT naïve dans AAV9_fitting_protocol.ipynb
+│   │   │                                #   section 4e) — un seul tirage stochastique (pas de moyenne sur plusieurs
+│   │   │                                #   répétitions comme la partie 1 d'AAV9_fitting_protocol.ipynb), donc à
+│   │   │                                #   confirmer sur plusieurs runs avant d'y voir plus qu'un seul point de mesure.
+│   │   ├── reproducibility/             # (renommé 2026-08-27, corrige la coquille "reproductibility") fit4functionaav9.csv
+│   │   │                                #   maintenant publié sur la release GitHub aav-raw-ngs-data-v1 (cf. README) —
+│   │   │                                #   gitignoré comme les autres CSV sources, plus le seul CSV source sans mécanisme
+│   │   │                                #   de provisioning documenté. log_enrichment_histograms.ipynb (2026-08-26) : lit fit4functionaav9.csv
 │   │   │                                #   (gitignoré, 74 464 lignes, colonnes Production1/Production2/Production =
 │   │   │                                #   deux réplicats de production + moyenne, ratios de fold-enrichment BRUTS pas
 │   │   │                                #   encore log-transformés) ; convertit chaque réplicat en log2 enrichment
@@ -228,30 +390,8 @@ Directed-Evolution-loop/
 │   │   │                                #   de pile-up au pseudocount (log2(1e-3)≈-9.97, PAS seulement les discordants) :
 │   │   │                                #   12 680 sur la ligne Production1=0 (17.0%), 12 805 sur Production2=0 (17.2%),
 │   │   │                                #   5 664 sur les deux à la fois.
-│   │   ├── mlp_regression/              # expériences de recouvrement MLP (DEEPMLP, ProfileMLP_recovery_nnx, ...)
-│   │   │   └── claude_variants/         # variantes exploratoires assistées par IA des mêmes expériences
-│   │   └── deeper_mlp/                  # diversity_sweep_deeper_mlp.ipynb : proche de diversity_sweep.ipynb mais PAS
-│   │                                    #   identique — mu=10/rho=1e-4/N0=150*N1 alignés, mais D=5e8 fixe (pas 1e8) et
-│   │                                    #   noise_viab=3 (pas 0.5, écart non résolu — cf. "État actuel") ; grille d0 propre
-│   │                                    #   200 à 200k (sur-ensemble du 5k-200k de diversity_sweep.ipynb côté petit d0)
-│   │                                    #   mais compare CETTE FOIS deux architectures entraînées sur les mêmes données :
-│   │                                    #   ShallowProfileMLP (~27k params, l'archi standard du projet, juste renommée)
-│   │                                    #   vs DeepProfileMLP (~90k params, nouveau) — embedding par position partagé
-│   │                                    #   (Linear 20->16 + GELU) moyenné (avg pool) sur les 7 positions pour la branche
-│   │                                    #   "profile", + branche pairwise (MLP sur les 21 paires de positions concaténées,
-│   │                                    #   avg pool) plus expressive que le BilinearHead déjà testé (et jugé marginal)
-│   │                                    #   dans MLP_bilinear_head_anticorrelated.ipynb, + tête dense à 4 couches (256-
-│   │                                    #   128-64-32) au lieu de 2 ; même batch_size adaptatif pour isoler l'architecture
-│   │                                    #   comme seule variable ; inclut les mêmes diagnostics d'entraînement
-│   │                                    #   (best_epoch/total_steps/val_mse) que diversity_sweep.ipynb pour vérifier si le
-│   │                                    #   modèle profond profite réellement de plus de gradient steps, pas seulement de
-│   │                                    #   plus de capacité. Recovery top-1000 comparée sur le pool d'éval fixe avec DEUX
-│   │                                    #   références GT<->protocole : profondeur fixe (constante ~93%, section 4) et
-│   │                                    #   profondeur APPARIÉE (D_eval_matched = D_FIXED/d0 * 50 000, ré-simulée à chaque
-│   │                                    #   d0 — le vrai point de comparaison "juste", puisque les labels d'entraînement du
-│   │                                    #   MLP sont eux-mêmes à cette profondeur D_FIXED/d0, pas à la profondeur fixe du
-│   │                                    #   pool d'éval) ; graphe recovery sur le split interne au sweep supprimé (sa
-│   │                                    #   taille dépend de d0, donc pas comparable d'un point à l'autre)
+│   │   └── mlp_regression/              # expériences de recouvrement MLP (DEEPMLP, ProfileMLP_recovery_nnx, ...)
+│   │       └── claude_variants/         # variantes exploratoires assistées par IA des mêmes expériences
 │   ├── docs/                            # PDF/tex de référence (extraction de poids, encodage one-hot, protocole, ...)
 │   └── contrib/                         # export Colab autonome d'un collaborateur, non importé ailleurs
 └── V0_prototype/                        # prototype première génération, gardé pour l'historique — imports déjà cassés, pas maintenu
@@ -278,6 +418,76 @@ jamais un « score » (ne pas écrire "predicted score", "F_score", "J_score", "
 
 ## État actuel
 
+- **2026-08-27 : la GT Potts devient la GT par défaut du projet + réorganisation de `notebooks/`.**
+  Suite à la validation des résultats d'`AAV9_potts_regression.ipynb` (r prédictif hors-échantillon
+  0.847 vs 0.782 pour la GT naïve, cf. entrée `AAV9_potts_regression.ipynb` ci-dessus), l'utilisateur
+  a demandé de basculer `F_viab`/`J_viab` vers cette nouvelle GT dans **tous** les notebooks du
+  dépôt qui les chargent, de réorganiser `notebooks/` (devenu "le bazar"), et de rendre le dépôt
+  clone-and-run pour les CSV sources manquants. Fait :
+  1. **Bascule GT** : 22 notebooks (23 candidats trouvés par grep sur `load_F_viab_aav9_mlp`/
+     `load_J_viab_aav9_mlp`, moins `AAV9_fitting_protocol.ipynb` — cf. son entrée ci-dessus pour
+     pourquoi il reste sur l'ancienne GT) basculés vers `load_F_viab_aav9_potts`/
+     `load_J_viab_aav9_potts` par script (remplacement d'identifiant, y compris dans la prose
+     markdown qui les cite). **Aucune ré-exécution forcée** (décision utilisateur : "les CSV se
+     regénèrent tout seuls") — à la place : sorties de cellules stockées effacées sur les 22
+     fichiers (rien de trompeur ne reste affiché à côté d'un code qui charge maintenant une GT
+     différente) et tous les caches `diversity*.csv` gitignorés obsolètes supprimés (~130 fichiers,
+     keyés par hyperparamètres mais pas par la source de GT — se seraient rechargés
+     silencieusement avec les anciennes données sinon). `AAV9_potts_regression.ipynb` (compare les
+     deux GT par nom) et `AAV9_profile_model.ipynb` (source de la GT naïve elle-même) gardent
+     volontairement les deux loaders / l'ancien loader.
+  2. **Réorganisation `notebooks/`** (8 → 6 dossiers, plus aucun nom avec espace) :
+     `analysis of correlation/` et `deeper_mlp/` fusionnés (chacun un seul notebook) dans
+     `analysis of parameters for viability/`, elle-même renommée `viability_parameter_sweeps/` ;
+     `reproductibility/` renommé `reproducibility/` (coquille). Fait via `git mv` (historique
+     préservé) — le mécanisme d'import réel du projet est l'install éditable
+     (`pyproject.toml`/`package-dir=lib`), pas les `sys.path.insert` de chaque notebook (déjà
+     silencieusement sans effet dans plusieurs d'entre eux), donc le déplacement ne casse aucun
+     import ; les CSV sont lus en chemin relatif au dossier du notebook, donc sûrs tant qu'ils
+     bougent avec lui (vérifié cas par cas avant déplacement).
+  3. **Provisioning CSV** : `lib/aav9_{F,J}_viab_potts.npy` trackés dans git (même convention que
+     les `.npy` naïfs) ; `fit4functionaav9.csv` (seul CSV source sans mécanisme de provisioning —
+     ni release, ni auto-génération) uploadé sur la release GitHub publique existante
+     `aav-raw-ngs-data-v1` (`gh release upload`/`edit`) ; `README.md` mis à jour (section "Data &
+     derived artifacts" + arbre "Repository structure", qui avait aussi dérivé de la réalité
+     indépendamment de ce changement).
+  **Non fait délibérément** : ré-exécution des 22 notebooks basculés (laissée à l'utilisateur,
+  cf. point 1) ; re-dérivation de mu/T_viab/noise_viab/D contre la nouvelle GT dans
+  `AAV9_fitting_protocol.ipynb` (décision utilisateur explicite, cf. son entrée ci-dessus) ; mise
+  à jour de la prose markdown citant des chiffres précis calculés sous l'ancienne GT dans les
+  notebooks de `selectivity_weight_regimes/` (flaggé dans leur entrée, texte non corrigé — seul le
+  code l'est).
+
+- **Fix 2026-08-26 : `jax_enable_x64` activé globalement dans `sequence_classesV1.py`.** Bug
+  repéré en creusant un pic suspect (au lieu d'un dégradé) sur le mode "viable" d'un histogramme
+  `target1` simulé dans `AAV9_fitting_protocol.ipynb` (cellule manuelle, `F_viab**2`/`J_viab**2`) :
+  `jax.random.poisson()` retourne un `int32` par défaut, qui se fait **silencieusement clamper**
+  (pas d'erreur) à `2**31-1` pour tout `rate` au-delà — vérifié sur les 68 776 séquences réelles
+  d'aav9 avec cette config exacte, **57.5%** des séquences (39 544/68 776) avaient leur `lambda2`
+  écrasé sur exactement la même valeur clampée, détruisant le signal de fitness relatif pour plus
+  de la moitié de la librairie. Present aussi (plus discrètement) sur la config de base du
+  projet : 138/68 776 séquences déjà clampées avant le fix (invisible en histogramme densité à
+  cette fraction, mais bien réel). `jax.config.update("jax_enable_x64", True)` en tout début de
+  fichier (doit précéder toute opération JAX) fait passer `jax.random.poisson()` en `int64` par
+  défaut (plafond ~9.2e18 au lieu de ~2.1e9) — vérifié : 0 séquence clampée sur la config de base
+  du projet après fix (1000/1000 valeurs uniques parmi les 1000 plus hautes, contre déjà des
+  doublons avant). `Protocol.compute_score()` cast maintenant aussi `F`/`J` en `float64` en
+  interne (les `.npy` de poids réels sont sauvegardés en `float32`, et JAX ne remonte pas
+  automatiquement un tableau float32 existant vers float64 même avec x64 activé globalement —
+  sans ce 2e cast, `exp(score/T_viab)` pouvait toujours déborder en `inf` en float32, et
+  `jax.random.poisson(inf)` renvoie silencieusement `0` au lieu d'un grand nombre). **Résidu
+  connu, non corrigé** : le cas `F_viab**2`/`J_viab**2` de `AAV9_fitting_protocol.ipynb` reste
+  si extrême (rate jusqu'à ~1e48 pour la séquence la plus haute) qu'il dépasse aussi ce que
+  `jax.random.poisson()` peut échantillonner correctement même en float64/int64 (limite propre à
+  l'algorithme interne de JAX à cette échelle, pas un problème de dtype) — 3 649 séquences
+  clampées au nouveau plafond int64 et 6 toujours à `lambda2=0` sur cette config précise
+  (c'était déjà 6 avant le fix). Alternative écartée (proposée mais non retenue) : clipper le
+  score avant `exp()` + repli sur une approximation Normale(rate, sqrt(rate)) au-delà du plafond,
+  qui aurait évité toute activation globale de x64 (coût : ~2x mémoire sur tous les tableaux
+  float/int JAX du projet, tous notebooks confondus) — gardée en tête si le résidu ci-dessus
+  devient gênant. **Tous les Protocol/ProtocolV2/ProtocolV3/ProtocolBacterialCFU + les 2 classes
+  de `lib/cross_packaging_draft.py`** re-testés après le fix (`N_loop_DE` sur 1-2 rounds,
+  sorties toutes finies) — aucune régression détectée.
 - **Convention depuis 2026-08-21 : pool d'évaluation fixe cross-notebook.** Tous les notebooks de
   `analysis of parameters for viability/` et `deeper_mlp/diversity_sweep_deeper_mlp.ipynb`
   incluent maintenant une section "Fixed 50,000-sequence evaluation pool" : `EVAL_POOL_KEY_SEED=999`,
@@ -332,6 +542,13 @@ jamais un « score » (ne pas écrire "predicted score", "F_score", "J_score", "
   2. `MLP_for_correlated_weights.ipynb` et `MLP_for_independent_weights.ipynb` affichent un label
      figé "200 000"/"200k" alors que le pool réel est de 2 000 000 ou 20 000 000 de séquences selon le
      notebook.
+  3. **(repéré 2026-08-26, casse `initialize_random_weights()`)** `build_J()` (`sequence_classesV1.py`,
+     modifié dans le commit "pre sequences classes update") valide maintenant que `interactions.shape
+     == (7, 7, 20, 20, 1)`, mais `initialize_random_weights()` lui passe toujours une simple liste
+     Python de tuples `(i, j, a, b, value)` — plante avec `AttributeError: 'list' object has no
+     attribute 'shape'` dès qu'on appelle `initialize_random_weights()`. Casse potentiellement tout
+     notebook qui en dépend pour générer des poids aléatoires ; pas corrigé (semble être un edit en
+     cours, pas terminé).
 - **Convention depuis 2026-08-21** : tous les nouveaux constructeurs `Protocol`/`ProtocolV2`/`ProtocolV3`
   passent `multinomialNGS=True` (reads NGS via `Multinomial(D, proportions)` au lieu de la Negative
   Binomial surdispersée) — appliqué à tous les notebooks existants. `dataset_filename()` (cache CSV de

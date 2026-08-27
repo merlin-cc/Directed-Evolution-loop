@@ -142,19 +142,30 @@ def build_multi_round_dataset(protocol, n_rounds, eps=0.5):
 ### ---------------------------- Ridge fit + CV --------------------------- ###
 #######################################################################################
 
-def ridge_cv_mse_potts(X, y, lambdas, kf, desc="Ridge CV"):
+def ridge_cv_mse_potts(X, y, lambdas, kf, sample_weight=None, desc="Ridge CV"):
     """
     K-fold CV MSE for Ridge regression on the Potts feature matrix, sweeping
     a grid of L2 penalties. The bias column (last column of X) is never
     penalized.
+
+    sample_weight : optional (N,) per-observation weights -- solves the weighted normal
+        equations (Xtr.T @ diag(w) @ Xtr + lam*I) beta = Xtr.T @ diag(w) @ ytr instead of the
+        unweighted ones. None (default) reproduces the original unweighted behavior exactly.
+        Validation MSE is left unweighted either way (CV should score plain predictive error,
+        not the training weighting).
     """
     mse = np.zeros(len(lambdas))
     n_feat = X.shape[1]
     for tr, va in tqdm(list(kf.split(X)), desc=desc, leave=False):
         Xtr, ytr = X[tr], y[tr]
         Xva, yva = X[va], y[va]
-        G   = Xtr.T @ Xtr
-        rhs = Xtr.T @ ytr
+        if sample_weight is None:
+            G   = Xtr.T @ Xtr
+            rhs = Xtr.T @ ytr
+        else:
+            wtr = sample_weight[tr]
+            G   = Xtr.T @ (wtr[:, None] * Xtr)
+            rhs = Xtr.T @ (wtr * ytr)
         for k, lam in enumerate(lambdas):
             reg = G.copy()
             reg[np.arange(n_feat - 1), np.arange(n_feat - 1)] += lam
@@ -186,15 +197,24 @@ def _unpack_potts_weights(w, T, L=L, A=A):
     return jnp.array(F_hat), jnp.array(J_hat)
 
 
-def fit_weights_potts(X, y, T, L=L, A=A, lam=1.0):
+def fit_weights_potts(X, y, T, L=L, A=A, lam=1.0, sample_weight=None):
     """
     Ridge fit of the pooled log-ratio targets, then unpack the flat weight
     vector back into (F_hat, J_hat) tensors rescaled by temperature T.
+
+    sample_weight : optional (N,) per-observation weights, same weighted-normal-equations
+        convention as ridge_cv_mse_potts. None (default) reproduces the original unweighted
+        fit exactly.
     """
     n_feat = X.shape[1]
-    G = X.T @ X
+    if sample_weight is None:
+        G   = X.T @ X
+        rhs = X.T @ y
+    else:
+        G   = X.T @ (sample_weight[:, None] * X)
+        rhs = X.T @ (sample_weight * y)
     G[np.arange(n_feat - 1), np.arange(n_feat - 1)] += lam
-    w = np.linalg.solve(G, X.T @ y)
+    w = np.linalg.solve(G, rhs)
     return _unpack_potts_weights(w, T, L=L, A=A)
 
 
@@ -223,6 +243,73 @@ def fit_weights_potts_unregularized(X, y, T, L=L, A=A):
 
 ### ---------------------------- End-to-end pipeline --------------------------- ###
 #######################################################################################
+
+def fit_weights_potts_from_data(seq_matrix, target, sample_weight=None, lambdas_grid=None,
+                                 k_folds=5, seed=0, verbose=True):
+    """
+    Ridge-fit F/J directly on an observed (sequence, target) dataset -- e.g. real aav9.csv
+    (one row per sequence, target already a real log enrichment) -- instead of a Protocol
+    simulated over multiple rounds. Reuses the exact same build_potts_features /
+    ridge_cv_mse_potts / fit_weights_potts / fit_weights_potts_unregularized recipe as
+    recover_weights_from_NGS, just skipping build_multi_round_dataset (which only makes sense
+    for a simulated Protocol's per-round NGS reads): aav9.csv already IS one flat (seq,
+    target) table, no round pooling needed.
+
+    No temperature rescaling (unlike fit_weights_potts's `T` for a Protocol's T_viab/T_sel):
+    `target` here is already a real log enrichment, not a Protocol score to be divided by a
+    temperature, so T=1.0 is passed through and F_hat/J_hat come out on target's own scale.
+
+    seq_matrix    : (N, L) raw amino-acid indices (same convention as build_potts_features).
+    target        : (N,) real-valued regression target (e.g. aav9.csv's log-enrichment column).
+    sample_weight : optional (N,) per-observation weights (e.g. 1/error**2 for datasets with a
+                    real per-sequence uncertainty column, like aav2.csv/aav5.csv -- aav9.csv's
+                    `error` is a constant, so leaving this None is equivalent there). When
+                    given, both the CV loop and the final fit solve the weighted normal
+                    equations (X.T @ diag(w) @ X + lam*I) beta = X.T @ diag(w) @ y instead of
+                    the unweighted ones.
+
+    Returns
+    -------
+    F_hat, J_hat, rank, info
+        rank : numerical rank of the (unweighted) design matrix from the unregularized OLS
+               fit, reported so callers can see whether they're in the n > p regime (real
+               aav9.csv: ~68,776 rows vs 8,541 features) or the p >> n regime
+               fit_weights_potts_unregularized's docstring warns about (small simulated
+               multi-round datasets).
+        info : dict with best lambda, its CV curve, and the lambdas grid.
+    """
+    if lambdas_grid is None:
+        lambdas_grid = np.logspace(-1, 2, 30)
+        if verbose:
+            print(f"lambdas_grid was not defined thus lambdas_grid = {lambdas_grid}")
+
+    X = build_potts_features(seq_matrix)
+    y = np.asarray(target, dtype=np.float64)
+
+    _, _, rank = fit_weights_potts_unregularized(X, y, T=1.0)
+    if verbose:
+        print(f"Design matrix rank: {rank} / {X.shape[1]} features ({X.shape[0]} obs)")
+        if rank < X.shape[1]:
+            print("  NOTE: rank-deficient design (p > n) -- ridge is not just a preference, "
+                  "the unregularized fit below is non-unique.")
+
+    kf = KFold(n_splits=k_folds, shuffle=True, random_state=seed)
+    cv_mse   = ridge_cv_mse_potts(X, y, lambdas_grid, kf, sample_weight=sample_weight,
+                                   desc="Ridge CV (aav9)")
+    best_lam = float(lambdas_grid[np.argmin(cv_mse)])
+
+    if verbose:
+        print(f"Best lambda: {best_lam:.4f}")
+        if best_lam in (lambdas_grid[0], lambdas_grid[-1]):
+            edge = "lower" if best_lam == lambdas_grid[0] else "upper"
+            print(f"  WARNING: best lambda is at the {edge} grid boundary ({best_lam:.4g}) "
+                  f"-- the true optimum may lie outside lambdas_grid; widen it.")
+
+    F_hat, J_hat = fit_weights_potts(X, y, T=1.0, lam=best_lam, sample_weight=sample_weight)
+
+    info = dict(lam=best_lam, cv_mse=cv_mse, lambdas_grid=lambdas_grid, n_obs=X.shape[0])
+    return F_hat, J_hat, rank, info
+
 
 def recover_weights_from_NGS(protocol, n_rounds=5, lambdas_grid=None, k_folds=5,
                               eps=0.5, seed=0, verbose=True):
