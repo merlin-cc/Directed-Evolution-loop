@@ -34,12 +34,15 @@ env/
 *.swo
 
 # Data / outputs (adjust if you want to track some)
+# All CSVs are ignored -- notebook-generated dataset caches (always named "diversity...") AND
+# the raw aav_viability_test/aav{2,5,9}.csv source data, which is too large to track in git
+# (aav5.csv alone is ~90MB) and is instead published as a GitHub Release asset -- see README
+# for the download link. Derived .npy weight files (lib/aav*_{F,J}_viab_mlp.npy) are tiny and
+# ARE tracked, so the repo is runnable right after a fresh clone without regenerating those.
 *.csv
 *.h5
 *.hdf5
 *.pkl
-*.npy
-*.npz
 
 # LaTeX auxiliary files
 *.aux

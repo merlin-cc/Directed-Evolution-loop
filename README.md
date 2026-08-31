@@ -15,14 +15,16 @@ Directed-Evolution-loop/
 │   │   ├── RegressionV1.py            # ridge-regression dataset builders
 │   │   ├── initialize_weights.py      # loads real AAV9 F_viab/J_viab, builds correlated/anticorrelated/indep F_sel/J_sel
 │   │   ├── MLP_regV1.py               # early/abandoned profile-only MLP attempt
-│   │   ├── aav9_F_viab_mlp.npy        # gitignored — derived artifact, see "Data & derived artifacts" below
-│   │   └── aav9_J_viab_mlp.npy        # gitignored — derived artifact, see "Data & derived artifacts" below
+│   │   └── aav{2,5,9}_{F,J}_viab_mlp.npy  # tracked in git (tiny) — derived artifacts, see "Data & derived artifacts" below
 │   ├── notebooks/
+│   │   ├── aav_viability_test/        # real AAV2/5/9 data: profile models (train ProfileMLP, export F_viab/J_viab),
+│   │   │                              #   fitting-protocol calibration, Potts-regression GT + GT-score study, ...
 │   │   ├── directed_evolution_loop/   # DE_loopV1.ipynb — the end-to-end directed-evolution simulation loop
+│   │   ├── mlp_regression/            # MLP recovery experiments (DEEPMLP, ProfileMLP_recovery_nnx, ...)
+│   │   │   └── claude_variants/       # AI-assisted exploratory variants of the same experiments
+│   │   ├── reproducibility/           # NGS replicate reproducibility + noise-source analysis (real AAV9 data)
 │   │   ├── selectivity_weight_regimes/# F_sel/J_sel correlated / anticorrelated / independent trio, + playground + plotting
-│   │   ├── aav_viability_test/        # AAV9_profile_model.ipynb — trains ProfileMLP on real AAV9 data, exports F_viab/J_viab
-│   │   └── mlp_regression/            # MLP recovery experiments (DEEPMLP, ProfileMLP_recovery_nnx, ...)
-│   │       └── claude_variants/       # AI-assisted exploratory variants of the same experiments
+│   │   └── viability_parameter_sweeps/# mu/T_viab/noise_viab/D/diversity sweeps + unified sweep + shallow-vs-deep MLP
 │   ├── docs/                     # reference PDFs/tex (weight extraction, one-hot encoding, protocol diagram, ...)
 │   └── contrib/                  # Yassine04_08_2026.py — a collaborator's standalone Colab export, not imported elsewhere
 └── V0_prototype/                 # first-generation prototype, kept for history — imports are already broken
@@ -54,26 +56,38 @@ Directed-Evolution-loop/
 
 ## Data & derived artifacts
 
-Raw data and everything derived from it are **gitignored** (`*.csv`, `*.npy`, ...) — a
-fresh clone won't have them. Regenerate them in this order:
-
-1. **Raw AAV data** (`aav5.csv`, `aav9.csv`) — place them in
-   `Modelization_V1/notebooks/aav_viability_test/`. Nothing in this repo generates them;
-   get them from wherever the team keeps the IDV AAV sequencing exports.
-2. **`aav9_F_viab_mlp.npy` / `aav9_J_viab_mlp.npy`** — run `AAV9_profile_model.ipynb`'s
-   export cell (section 3b, right after `F_mlp_fj, J_mlp =
-   extract_effective_FJ_mlp(...)`). It trains `ProfileMLP` on `aav9.csv` and writes the
-   two `.npy` files into `Modelization_V1/lib/`, where `initialize_weights.py` expects
-   them.
-3. **`diversity*.csv` datasets** in `notebooks/selectivity_weight_regimes/` —
-   auto-generated (and cached) the first time each of `MLP_for_correlated_weights.ipynb`
-   / `MLP_for_anticorrelated_weights.ipynb` / `MLP_for_independent_weights.ipynb` runs.
+1. **Raw AAV NGS data** (`aav2.csv`, `aav5.csv`, `aav9.csv`, `fit4functionaav9.csv`) —
+   gitignored, too large to track in git (`aav5.csv` alone is ~90MB). Published instead as
+   assets on the
+   [`aav-raw-ngs-data-v1` release](https://github.com/merlin-cc/Directed-Evolution-loop/releases/tag/aav-raw-ngs-data-v1).
+   Download and place each file directly in its notebook folder (the first 3 in
+   `Modelization_V1/notebooks/aav_viability_test/`, `fit4functionaav9.csv` in
+   `Modelization_V1/notebooks/reproducibility/`):
+   ```bash
+   gh release download aav-raw-ngs-data-v1 --repo merlin-cc/Directed-Evolution-loop \
+     --dir /tmp/aav-raw-ngs-data
+   mv /tmp/aav-raw-ngs-data/aav{2,5,9}.csv Modelization_V1/notebooks/aav_viability_test/
+   mv /tmp/aav-raw-ngs-data/fit4functionaav9.csv Modelization_V1/notebooks/reproducibility/
+   ```
+   (or download them by hand from the release page above, no `gh` required).
+2. **`aav{2,5,9}_F_viab_mlp.npy` / `aav{2,5,9}_J_viab_mlp.npy`** (naive per-cell GT) and
+   **`aav9_F_viab_potts.npy` / `aav9_J_viab_potts.npy`** (joint ridge/Potts-regression GT,
+   the project's current default for AAV9 — better held-out predictive accuracy than the
+   naive one, see `Modelization_V1/notebooks/aav_viability_test/AAV9_potts_regression.ipynb`)
+   in `Modelization_V1/lib/` — tiny (a few hundred KB total) derived weight arrays, **tracked
+   directly in git**, so a fresh clone has them without any extra step. Only regenerate them
+   if you actually need to: the naive ones come from `AAV{2,5,9}_profile_model.ipynb`'s export
+   cell (section 3c, right after `F_viab_GT`/`J_naive_final` are built) — it trains
+   `ProfileMLP` on that AAV's raw CSV from step 1 as a scan target and overwrites the naive
+   `.npy` pair; the Potts ones come from `AAV9_potts_regression.ipynb`'s export cell (a joint
+   ridge fit via `RegressionV1.fit_weights_potts_from_data`, ~10 min). Both write into
+   `Modelization_V1/lib/`, where `initialize_weights.py` expects them.
+3. **`diversity*.csv` datasets** in `notebooks/selectivity_weight_regimes/` and
+   `notebooks/viability_parameter_sweeps/` — gitignored, auto-generated (and cached) the
+   first time each of `MLP_for_correlated_weights.ipynb` / `MLP_for_anticorrelated_weights.ipynb`
+   / `MLP_for_independent_weights.ipynb` / `F_permutation_recovery_correlation.ipynb` runs.
    The first run of each is slow (MLP training + a brute-force scan over the full
-   `20**7` sequence space, ~15–20 min); later runs just load the cached CSV.
-
-## Next tasks
-
-- modelize the pair-interactions between acido-amines. Pott's model ✅
-- model (Ridge regression) to fit the scores for each sequence (first for the linear model) ✅
-- Poisson regression to better fit the weights
-- model to fit the weights for the Pott's model
+   `20**7` sequence space, ~15–20 min); later runs just load the cached CSV. These caches are
+   keyed by hyperparameters but not by which GT (`F_viab`/`J_viab`) produced them — if you
+   swap the GT source again, delete the stale `diversity*.csv` files for any notebook you
+   plan to re-run, otherwise it will silently reload the old GT's cached results.

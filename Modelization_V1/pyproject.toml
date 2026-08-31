@@ -23,5 +23,5 @@ dependencies = [
 ]
 
 [tool.setuptools]
-py-modules = ["sequence_classesV1", "analysisV1", "RegressionV1", "initialize_weights", "MLP_regV1"]
+py-modules = ["sequence_classesV1", "analysisV1", "RegressionV1", "initialize_weights"]
 package-dir = {"" = "lib"}
