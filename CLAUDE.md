@@ -66,7 +66,7 @@ Directed-Evolution-loop/
 │   │                                    #   `ProtocolCrossPackagingBackground` + `ProtocolWithHallucination` à la fois,
 │   │                                    #   héritage multiple coopératif sans conflit — chaque classe redéfinit une
 │   │                                    #   étape différente du pipeline) ; utilisée dans
-│   │                                    #   `aav_viability_test/AAV9_cross_packaging_and_hallucination_impact.ipynb`.
+│   │                                    #   `aav_viability_test/aav9/AAV9_cross_packaging_and_hallucination_impact.ipynb`.
 │   ├── notebooks/                       # (réorganisé 2026-08-27 : "analysis of correlation"/"analysis of
 │   │                                    #   parameters for viability"/deeper_mlp fusionnés dans
 │   │                                    #   viability_parameter_sweeps/ ; "reproductibility" corrigé en
@@ -167,7 +167,7 @@ Directed-Evolution-loop/
 │   │   │                                #   sweep supprimé (sa taille dépend de d0, donc pas comparable d'un point à l'autre)
 │   │   │                                # GT basculée vers Potts (2026-08-27, cf. "État actuel") sur les 10 notebooks de cette
 │   │   │                                #   section (aucun exclu — AAV9_fitting_protocol.ipynb, seul notebook non basculé du projet,
-│   │   │                                #   est dans aav_viability_test/, pas ici) ; sorties de cellules effacées, caches
+│   │   │                                #   est dans aav_viability_test/aav9/, pas ici) ; sorties de cellules effacées, caches
 │   │   │                                #   diversity*.csv obsolètes supprimés, à ré-exécuter avant de faire confiance à un chiffre
 │   │   │                                #   affiché. Caveat particulier sur mu_HEK_multiplicity_sweep.ipynb/unified_parameter_sweep.ipynb :
 │   │   │                                #   tous deux réutilisent le point de fonctionnement "réaliste" (mu=50/T_viab=0.8/noise_viab=0.5/
@@ -191,8 +191,10 @@ Directed-Evolution-loop/
 │   │   │                                #   changement), à ré-exécuter avant de faire confiance à un chiffre affiché. Plusieurs
 │   │   │                                #   de ces notebooks citent en prose des chiffres précis (magnitudes, percentiles)
 │   │   │                                #   calculés sous l'ANCIENNE GT — pas corrigés dans le texte, seulement dans le code.
-│   │   ├── aav_viability_test/          # AAV{2,5,9}_profile_model.ipynb (entraîne ProfileMLP sur données réelles),
-│   │   │                                #   AAV_MLP_weights_recovery.ipynb, checks de recouvrement d'erreur/top500
+│   │   ├── aav_viability_test/          # AAV5_profile_model.ipynb (entraîne ProfileMLP sur données réelles),
+│   │   │                                #   checks de recouvrement d'erreur/top500 (AAV2_profile_model.ipynb déplacé
+│   │   │                                #   dans obsolete/, cf. plus bas)
+│   │   │   └── aav9/                    # (créé 2026-08-31, déplacement manuel de l'utilisateur) tous les 7 notebooks AAV9 + aav9.csv
 │   │   │                                # AAV9_fitting_protocol.ipynb (2026-08-25) : SEUL notebook du projet volontairement
 │   │   │                                #   PAS basculé vers la GT Potts (2026-08-27, décision utilisateur) — reste le
 │   │   │                                #   document historique de comment mu/T_viab/noise_viab/D ont été dérivés (via
@@ -391,7 +393,7 @@ Directed-Evolution-loop/
 │   │   │                                #   ignorée.
 │   │   │                                # ProfileMLP_train_Production1_test_Production2.ipynb (2026-08-26) : check de
 │   │   │                                #   généralisation cross-réplicat -- même ProfileMLP/boucle d'entraînement que
-│   │   │                                #   aav_viability_test/AAV9_profile_model.ipynb, entraîné sur 20% des variants
+│   │   │                                #   aav_viability_test/aav9/AAV9_profile_model.ipynb, entraîné sur 20% des variants
 │   │   │                                #   (log2(Production1) comme cible) et testé sur les 80% restants MAIS avec
 │   │   │                                #   log2(Production2) comme cible de test (pas Production1) -- teste si le
 │   │   │                                #   signal appris généralise au-delà du bruit de réplicat propre à Production1.
@@ -428,10 +430,43 @@ Directed-Evolution-loop/
 │   │   │                                #   de pile-up au pseudocount (log2(1e-3)≈-9.97, PAS seulement les discordants) :
 │   │   │                                #   12 680 sur la ligne Production1=0 (17.0%), 12 805 sur Production2=0 (17.2%),
 │   │   │                                #   5 664 sur les deux à la fois.
-│   │   └── mlp_regression/              # expériences de recouvrement MLP (DEEPMLP, ProfileMLP_recovery_nnx, ...)
-│   │       └── claude_variants/         # variantes exploratoires assistées par IA des mêmes expériences
+│   │   ├── mlp_regression/              # expériences de recouvrement MLP (DEEPMLP, ProfileMLP_recovery_nnx, ...)
+│   │   │   └── claude_variants/         # variantes exploratoires assistées par IA des mêmes expériences
+│   │   └── obsolete/                    # (créé 2026-08-31) notebooks obsolètes, gardés pour référence — pas maintenus,
+│   │                                    #   pas dans le flux de travail actif
+│   │                                    # AAV_MLP_weights_recovery.ipynb (déplacé depuis aav_viability_test/) : charge
+│   │                                    #   sa référence F_viab/J_viab via np.load direct sur lib/{name}_F_viab_mlp.npy/
+│   │                                    #   _J_viab_mlp.npy (PAS via initialize_weights.py, jamais basculé vers la GT
+│   │                                    #   Potts du 2026-08-27 — compare un MLP fraîchement entraîné à l'ancien
+│   │                                    #   model_mlp naïf par construction, pas à une GT de simulation) ; utilisateur
+│   │                                    #   prévoit de le compléter/mettre à jour plus tard.
+│   │                                    # AAV2_AAV5_error_vs_recovery_check.ipynb (déplacé depuis aav_viability_test/,
+│   │                                    #   par l'utilisateur directement) et AAV2_profile_model.ipynb (déplacé depuis
+│   │                                    #   aav_viability_test/, sur demande explicite 2026-08-31) — ce dernier vient
+│   │                                    #   pourtant d'être basculé vers la régression de Potts jointe (cf. "État
+│   │                                    #   actuel" 2026-08-31), donc obsolète pour une autre raison que la GT (pas
+│   │                                    #   précisée par l'utilisateur au moment du déplacement).
 │   ├── docs/                            # PDF/tex de référence (extraction de poids, encodage one-hot, protocole, ...)
 │   └── contrib/                         # export Colab autonome d'un collaborateur, non importé ailleurs
+├── Modelization_V2/                     # (créé 2026-08-31) successeur propre, Potts-régression UNIQUEMENT — cf. son
+│                                        #   propre README.md pour le détail complet (raison d'être, méthode de
+│                                        #   régression avec sources scientifiques, ce qui a été inclus/exclu). Aucune
+│                                        #   trace du double-mutant-scan (extract_effective_F/extract_effective_FJ_mlp) ;
+│                                        #   autonome (pyproject.toml propre, sys.path.insert vers son propre lib/ —
+│                                        #   PAS d'install éditable partagée avec V1, pour éviter toute collision de nom
+│                                        #   de module) — vérifié empiriquement (import frais + assertion sur __file__).
+│   ├── pyproject.toml                   # nom de package distinct (directed-evolution-modelization-v2), install
+│                                        #   éditable optionnelle (pas requise pour faire tourner les notebooks)
+│   ├── lib/                             # copies de sequence_classesV1.py/analysisV1.py/RegressionV1.py/
+│                                        #   initialize_weights.py/cross_packaging_draft.py (aucune ne contient de
+│                                        #   mutant-scan) + aav9_{F,J}_viab_potts.npy (la nouvelle GT) +
+│                                        #   aav9_{F,J}_viab_mlp.npy (ancienne GT naïve, gardée UNIQUEMENT parce
+│                                        #   qu'AAV9_potts_regression.ipynb s'y compare en interne pour se valider)
+│   └── notebooks/                       # AAV9_potts_regression.ipynb (construit la GT), AAV9_potts_GT_score_study.ipynb,
+│                                        #   AAV9_potts_GT_fitting_protocol.ipynb + aav9.csv — les 3 seuls notebooks du
+│                                        #   projet trouvés à la fois propres de mutant-scan ET déjà sur la GT Potts.
+│                                        #   AAV2/AAV5 exclus (aucun de leurs notebooks n'est propre de mutant-scan) ;
+│                                        #   liste complète des fichiers exclus et pourquoi dans le README.md de ce dossier.
 └── V0_prototype/                        # prototype première génération, gardé pour l'historique — imports déjà cassés, pas maintenu
 ```
 
@@ -456,6 +491,60 @@ jamais un « score » (ne pas écrire "predicted score", "F_score", "J_score", "
 
 ## État actuel
 
+- **2026-08-31 : création de `Modelization_V2/`**, successeur propre et autonome ne gardant QUE
+  la régression de Potts (aucune trace du double-mutant-scan). Migration sélective depuis V1 —
+  quand un fichier était ambigu (notebook pas clairement propre de mutant-scan, ou dataset
+  aav2/aav5 sans notebook Potts-only disponible), il a été laissé de côté plutôt que deviné
+  (consigne explicite utilisateur : ne pas demander en cas de doute, exclure et rapporter).
+  Transféré : `AAV9_potts_regression.ipynb`/`AAV9_potts_GT_score_study.ipynb`/
+  `AAV9_potts_GT_fitting_protocol.ipynb` (seuls notebooks du projet trouvés à la fois SANS
+  `extract_effective_F`/`extract_effective_FJ_mlp` ET déjà sur les loaders Potts) + leurs
+  dépendances lib (`sequence_classesV1.py`/`analysisV1.py`/`RegressionV1.py`/
+  `initialize_weights.py`/`cross_packaging_draft.py`, aucune ne contient de mutant-scan) +
+  `aav9.csv` + `aav9_{F,J}_viab_potts.npy` + `aav9_{F,J}_viab_mlp.npy` (naïf, gardé seulement
+  parce qu'`AAV9_potts_regression.ipynb` s'y compare en interne pour se valider — pas un
+  résidu du mutant-scan). Chemins relatifs réécrits pour la nouvelle profondeur (`../lib` au
+  lieu de `../../..`), vérifié empiriquement par import frais + assertion `__file__` sous
+  `Modelization_V2/` (aucune résolution vers `Modelization_V1/`). PAS d'install pip éditable
+  pour V2 dans le venv partagé (collision de nom de module avec V1 sinon) — l'import fonctionne
+  via `sys.path.insert` seul, cf. `Modelization_V2/README.md`. Laissé de côté : AAV2/AAV5 (aucun
+  de leurs notebooks n'est propre de mutant-scan — `AAV{2,5}_profile_model.ipynb` en ont encore
+  dans leur section MLP-recovery malgré la bascule Potts de leur section GT le même jour ;
+  `AAV{2,5}_fitting_protocol.ipynb` chargent encore l'ancien npy, pas le Potts) ;
+  `AAV9_cross_packaging_and_hallucination_impact.ipynb`, `AAV9_FJ_matrix_top500_check.ipynb`,
+  toute la famille `viability_parameter_sweeps/`/`selectivity_weight_regimes/` — hors périmètre
+  de cette migration (méthodologie de construction de la GT), pas audités un par un. Détail
+  complet dans `Modelization_V2/README.md`, qui documente aussi la méthode de régression de
+  Potts elle-même avec sources scientifiques (Weigt et al. 2009 PNAS pour le formalisme
+  Potts/champs+couplages ; Otwinowski & Plotkin 2014 PNAS pour l'inférence par régression d'un
+  paysage de fitness additif+pairwise et son biais ; Rollins et al. 2019 Nature Genetics pour
+  la méthode la plus directement analogue — régression régularisée du même modèle sur des
+  données de mutagenèse profonde).
+- **2026-08-31 : `AAV2_profile_model.ipynb`/`AAV5_profile_model.ipynb` basculés eux aussi vers
+  une régression de Potts jointe (F+J), au lieu du group-means naïf séquentiel — même méthode
+  que `AAV9_potts_regression.ipynb`, appliquée cette fois directement DANS les notebooks
+  `profile_model` (pas un notebook séparé comme pour aav9). Section 2 ("Building a supposed
+  Ground Truth") : `F_groundtruth_viability` remplacée par `RegressionV1.fit_weights_potts_from_data(
+  seq_matrix, target, seed=0)` → `F_potts`/`J_potts` calculés ensemble (plus de F d'abord, J en
+  résidu ensuite). Section 3b : `J_groundtruth_naive` (group-means + `min_support=5`) supprimée —
+  `J_potts` déjà disponible depuis la section 2, comparé au `J_mlp` du scan double-mutant sur tout
+  le tableau off-diagonal (plus de `mask_support`/NaN filtering, `J_potts` est dense par
+  construction ridge). Nouvelle cellule d'export `lib/aav{2,5}_F_viab_potts.npy`/
+  `_J_viab_potts.npy` ajoutée à la suite de l'export MLP existant (même convention que la section 6
+  d'`AAV9_potts_regression.ipynb`) — **pas encore de loader dans `initialize_weights.py`** pour
+  aav2/aav5 (seul `load_F_viab_aav9_potts`/`load_J_viab_aav9_potts` existent à ce jour). Corrigé au
+  passage : les deux notebooks utilisaient `gaussian_kde` (section "1b. Target distribution") pour
+  la détection de mode/vallée — remplacé par un histogramme binné (`np.histogram`, 60 bins) +
+  `find_peaks` sur les comptages, seule méthode autorisée dans ce projet (cf. consigne permanente
+  utilisateur "jamais de KDE" — `new_variant_appearance_analysis.ipynb`/
+  `log_enrichment_histograms.ipynb` suivaient déjà cette convention, ces deux-là ne l'avaient pas
+  reçue). `AAV9_profile_model.ipynb` n'est PAS touché par ce changement (reste volontairement la
+  version naïve/historique, `AAV9_potts_regression.ipynb` étant déjà son pendant Potts en notebook
+  séparé). Notebooks non ré-exécutés après ces éditions (sorties de cellules effacées) — à relancer
+  avant de faire confiance à un chiffre affiché ; `aav5.csv` (737 587 séquences) rendra la CV ridge
+  nettement plus lente que sur aav9 (68 776 séquences), pas encore mesuré.
+- **2026-08-31 : notebooks obsolètes déplacés dans `Modelization_V1/notebooks/obsolete/`** —
+  nouveau dossier, cf. son entrée dans "Structure du projet" ci-dessus.
 - **2026-08-27 : la GT Potts devient la GT par défaut du projet + réorganisation de `notebooks/`.**
   Suite à la validation des résultats d'`AAV9_potts_regression.ipynb` (r prédictif hors-échantillon
   0.847 vs 0.782 pour la GT naïve, cf. entrée `AAV9_potts_regression.ipynb` ci-dessus), l'utilisateur
