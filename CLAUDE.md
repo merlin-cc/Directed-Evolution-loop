@@ -469,10 +469,82 @@ Directed-Evolution-loop/
 │                                        #   aav9_{F,J}_viab_mlp.npy (ancienne GT naïve, gardée UNIQUEMENT parce
 │                                        #   qu'AAV9_potts_regression.ipynb s'y compare en interne pour se valider)
 │   └── notebooks/                       # AAV9_potts_regression.ipynb (construit la GT), AAV9_potts_GT_score_study.ipynb,
-│                                        #   AAV9_potts_GT_fitting_protocol.ipynb + aav9.csv — les 3 seuls notebooks du
-│                                        #   projet trouvés à la fois propres de mutant-scan ET déjà sur la GT Potts.
-│                                        #   AAV2/AAV5 exclus (aucun de leurs notebooks n'est propre de mutant-scan) ;
-│                                        #   liste complète des fichiers exclus et pourquoi dans le README.md de ce dossier.
+│       │                                #   AAV9_potts_GT_fitting_protocol.ipynb + aav9.csv — les 3 seuls notebooks du
+│       │                                #   projet trouvés à la fois propres de mutant-scan ET déjà sur la GT Potts.
+│       │                                #   AAV2/AAV5 exclus (aucun de leurs notebooks n'est propre de mutant-scan) ;
+│       │                                #   liste complète des fichiers exclus et pourquoi dans le README.md de ce dossier.
+│       └── notebooks/Viability/         # (réorganisation manuelle en cours côté utilisateur, d'où le "notebooks/notebooks/"
+│                                        #   redoublé — les 3 notebooks ci-dessus y ont été recopiés, plus fit4functionaav9.csv,
+│                                        #   AAV9_fit4function_potts_vs_mlp.ipynb, AAV9_potts_simulated_replicate_stochasticity.ipynb,
+│                                        #   discordant_variants_aav9.ipynb). Tous ces notebooks localisent lib/ en remontant
+│                                        #   jusqu'à Modelization_V2/ (pas de "../../lib" en dur), justement pour survivre à ce
+│                                        #   genre de déplacement.
+│                                        # AAV9_cross_packaging_parameter_sweeps.ipynb (2026-09-02) : sweeps de paramètres du
+│                                        #   protocole avec cross-packaging SEUL (ProtocolCrossPackagingBackground, pas
+│                                        #   d'hallucination ni de mutations PCR ; cross_packaging_rate=0 redonne exactement
+│                                        #   ProtocolV3, donc le baseline non perturbé est le 1er point du 1er sweep). 5 sweeps
+│                                        #   — cross_packaging_rate / mu / T_viab / noise_viab / D — tous autour du même point
+│                                        #   de fonctionnement (mu=50, T_viab=1.3 la température propre à la GT Potts,
+│                                        #   noise_viab=0.5, D=1e9, rho=1e-3, N0=150*N1, cross_packaging_rate=0.05), un seul
+│                                        #   paramètre variant à la fois. Trois figures par sweep : (1) superposition des
+│                                        #   histogrammes de log2 enrichment réel aav9 / protocole simulé / prédiction MLP,
+│                                        #   un panneau par valeur, en brut ET recalé sur la médiane (le Production réel est un
+│                                        #   ratio normalisé, le target simulé un ratio de reads bruts — l'offset log2 constant
+│                                        #   entre les deux ne porte pas d'information et n'affecte ni r ni les recoveries) ;
+│                                        #   (2) recovery du VRAI fit4function (Pearson r + top-10% + top-500, moyenne des deux
+│                                        #   réplicats Production1/Production2, avec le plafond réplicat en référence) pour le
+│                                        #   protocole brut ET pour le MLP, en fonction du paramètre balayé ; (3) paysage GT vs
+│                                        #   paysage propre du MLP, tous deux sur les 20^7 = 1.28e9 variants (scan exhaustif
+│                                        #   chunké sur GPU, ~10 s), avec placement des top-500 que le MLP désigne dans ce même
+│                                        #   espace complet (~25 s de scan MLP par point de sweep), plus le top-500 propre à la
+│                                        #   GT (le maximum atteignable) et l'étendue GT de la vraie librairie de 74 464 variants.
+│                                        #   Le MLP prédit un LOG2 ENRICHMENT — une lecture expérimentale bruitée, dépendante du
+│                                        #   tirage aléatoire d'une expérience — alors que la GT produit un SCORE Potts déterministe :
+│                                        #   ce ne sont pas deux plages différentes d'une même quantité mais deux objets différents,
+│                                        #   donc superposer leurs histogrammes n'a pas de sens et un simple recalage ne le répare pas
+│                                        #   (une version intermédiaire ramenait la prédiction brute sur l'axe GT par carte affine —
+│                                        #   abandonnée, cf. plus bas). D'où le SURROGATE POTTS (section 4d, conception utilisateur
+│                                        #   2026-09-02) : une régression ridge d'un Potts sur les prédictions du MLP, qui transforme
+│                                        #   le MLP en objet produisant un SCORE, de la même forme fonctionnelle (F+J) que la GT et
+│                                        #   donc directement superposable. Ajusté sur 2 000 000 de variants tirés UNIFORMÉMENT dans
+│                                        #   l'espace complet (SAMPLE_IDX), PAS sur les 74 464 de la librairie — point critique : un
+│                                        #   surrogate ajusté sur la seule librairie n'est contraint que là, et extrapole précisément
+│                                        #   là où vivent les meilleurs picks du MLP (l'argmax sur 1.28e9 est par définition loin de
+│                                        #   la librairie designée) ; c'était le défaut de la 1ère version, où les ticks du top-500
+│                                        #   tombaient au milieu de la distribution au lieu de son extrême droite. Le surrogate étant
+│                                        #   fitté sur du log2 enrichment, son score approxime GT/T_viab : la figure le multiplie par
+│                                        #   T_viab (constante connue du protocole, PAS un recalage ajusté) et affiche en regard la
+│                                        #   pente empiriquement ajustée comme contrôle de cette relation. Deux astuces pour ne jamais
+│                                        #   matérialiser le design 2e6 x 8 541 (68 Go) : X.T@X ne dépend que des séquences et
+│                                        #   SAMPLE_IDX est fixe, donc accumulé par chunks et factorisé (Cholesky) UNE fois ; X.T@y
+│                                        #   change à chaque point mais toutes les features Potts sont des INDICATRICES, donc ce
+│                                        #   produit est juste y sommé par feature — quelques np.bincount, aucune matrice. Chaque fit
+│                                        #   se réduit ensuite à une descente triangulaire. Section 11 : TAUX DE RECOUVREMENT TOP-K
+│                                        #   entre le classement du MLP (score du surrogate) et celui de la GT, tracé en fonction de k
+│                                        #   (de quelques dizaines à des centaines de millions) — la question centrale du notebook en
+│                                        #   une courbe. Lu sur une table jointe (score GT x score surrogate) calculée en UNE passe
+│                                        #   full-space dans evaluate_point : ses sommes de queue donnent l'intersection à TOUT k,
+│                                        #   exact à la résolution des bins, là où un top-k glissant devrait être refait pour chaque k.
+│                                        #   Deux conséquences de la grille de bins, documentées dans le notebook : k ne prend que les
+│                                        #   valeurs exprimables par les bords de bins GT (espacement irrégulier), et les deux
+│                                        #   ensembles top-k ne peuvent pas avoir exactement la même taille, donc le dénominateur est
+│                                        #   le plus grand des deux (lecture conservatrice). Assertion de cohérence : la marginale GT
+│                                        #   de la table jointe doit égaler l'histogramme GT calculé séparément. Section 11b : recovery
+│                                        #   des 500 picks du MLP dans le VRAI top-K global de la GT (500/5k/50k/500k), seuils lus sur
+│                                        #   la courbe de survie et recoupés à K=500 contre l'intersection exacte. Section 12 :
+│                                        #   RECOMMANDATION DE PROTOCOLE dérivée des données (pas écrite à la main), avec la
+│                                        #   distinction explicite entre les deux familles de métriques — r_mlp/prec10/top500 vs
+│                                        #   fit4function mesurent le RÉALISME de la simulation (les maximiser reviendrait à régler le
+│                                        #   labo pour reproduire l'expérience qu'on a déjà), tandis que gt_recovery_* mesure la capacité à retrouver la
+│                                        #   VÉRITÉ SOUS-JACENTE, qui est le but réel du projet et donc le critère optimisé ; les
+│                                        #   désaccords entre les deux sont rapportés. Caveats imprimés : un seul paramètre varié à
+│                                        #   la fois (la config combinée est une extrapolation non testée), une seule seed par point,
+│                                        #   cross_packaging_rate non calibré, baseline dérivée contre l'ANCIENNE GT naïve. Le MLP est
+│                                        #   entraîné sur le log enrichment DU PROTOCOLE (jamais sur les colonnes Production
+│                                        #   réelles) et évalué sur un split test tenu à l'écart, fixe et partagé par tous les
+│                                        #   points de sweep. Tout est en log2 des deux côtés. NON EXÉCUTÉ (demande explicite de
+│                                        #   l'utilisateur) — sorties de cellules vides, à lancer avant de faire confiance à un
+│                                        #   chiffre ; compter ~30 min sur GPU pour les 30 points de sweep.
 └── V0_prototype/                        # prototype première génération, gardé pour l'historique — imports déjà cassés, pas maintenu
 ```
 
