@@ -331,9 +331,12 @@ Directed-Evolution-loop/
 │   │   │                                #   score GT vs target réel) en remplaçant la source de GT par F_potts/J_potts
 │   │   │                                #   (chargés via les loaders `load_F_viab_aav9_potts`/`load_J_viab_aav9_potts`,
 │   │   │                                #   PAS re-fittés — la régression ridge elle-même reste dans
-│   │   │                                #   AAV9_potts_regression.ipynb), mêmes hyperparamètres baseline
-│   │   │                                #   (mu=50/T_viab=0.8/noise_viab=0.5/D=1e9/RHO_REF=1e-3) que la section 2
-│   │   │                                #   d'AAV9_fitting_protocol.ipynb pour rester comparable. Ajoute aussi une
+│   │   │                                #   AAV9_potts_regression.ipynb), mêmes hyperparamètres baseline QUE
+│   │   │                                #   la section 2 d'AAV9_fitting_protocol.ipynb SAUF T_viab
+│   │   │                                #   (mu=50/T_viab=1.3/noise_viab=0.5/D=1e9/RHO_REF=1e-3) — 1.3 est la
+│   │   │                                #   température de base propre à la GT Potts (2026-08-31, précisé par
+│   │   │                                #   l'utilisateur), PAS 0.8 (qui reste la valeur de l'ancienne GT naïve).
+│   │   │                                #   Ajoute aussi une
 │   │   │                                #   section absente ailleurs : quelques `J_potts[i,j]` individuels affichés
 │   │   │                                #   directement (heatmap de force de couplage par paire de positions, puis
 │   │   │                                #   les 4 paires les plus fortes en détail — positions (3,4)/(2,3)/(4,5)/(3,6),
@@ -353,8 +356,11 @@ Directed-Evolution-loop/
 │   │   │                                #   AAV9_fitting_protocol.ipynb, même numérotation de sections que les siblings
 │   │   │                                #   AAV2/AAV5_fitting_protocol.ipynb (qui rejouent ces mêmes sections pour un
 │   │   │                                #   autre dataset AAV, ici c'est le même aav9.csv mais une autre GT) — F_potts/
-│   │   │                                #   J_potts au lieu de la GT naïve, mêmes hyperparamètres baseline
-│   │   │                                #   (mu=50/T_viab=0.8/noise_viab=0.5/D=1e9/RHO_REF=1e-3). Version plus complète
+│   │   │                                #   J_potts au lieu de la GT naïve, hyperparamètres baseline
+│   │   │                                #   (mu=50/T_viab=0.8/noise_viab=0.5/D=1e9/RHO_REF=1e-3 dans le code actuel de ce
+│   │   │                                #   notebook — PAS encore corrigé vers T_viab=1.3, cf. "État actuel" 2026-08-31 ;
+│   │   │                                #   ce notebook a aussi mu=500 dans sa cellule de config, pas 50, incohérence
+│   │   │                                #   repérée en marge, ni l'une ni l'autre pas corrigées ici). Version plus complète
 │   │   │                                #   qu'AAV9_potts_GT_score_study.ipynb (sections 2/2b/5/6 seulement, pas de
 │   │   │                                #   partie 7) : ajoute la partie 7 (ProfileMLP, indépendante du choix de GT,
 │   │   │                                #   incluse pour compléter le parallèle avec AAV9_fitting_protocol.ipynb) et une
@@ -491,6 +497,18 @@ jamais un « score » (ne pas écrire "predicted score", "F_score", "J_score", "
 
 ## État actuel
 
+- **2026-08-31 : `T_viab=1.3` est la température de base pour la GT Potts** (précisé par
+  l'utilisateur), **PAS `T_viab=0.8`** — 0.8 reste la valeur dérivée pour l'ANCIENNE GT naïve
+  dans `AAV9_fitting_protocol.ipynb` (partie 2, recherche contre l'ancienne GT), jamais
+  re-dérivée officiellement pour la GT Potts, mais `AAV9_potts_GT_score_study.ipynb`
+  utilisait déjà 1.3 dans son code (confirmé correct). `mu=50`/`noise_viab=0.5`/`D=1e9`
+  restent inchangés entre les deux GT. Corrigé dans ce fichier (entrées
+  `AAV9_potts_GT_score_study.ipynb`/`AAV9_potts_GT_fitting_protocol.ipynb` ci-dessus) et dans
+  `Modelization_V2/notebooks/AAV9/AAV9_potts_GT_fitting_protocol.ipynb` +
+  `AAV9_potts_simulated_replicate_stochasticity.ipynb` (ce dernier ré-exécuté avec la bonne
+  valeur). **Pas corrigé** : `AAV9_potts_GT_fitting_protocol.ipynb` dans `Modelization_V1`
+  (reste à `T_viab=0.8`/`mu=500` dans son code, incohérence pré-existante non résolue — cf.
+  entrée détaillée ci-dessus).
 - **2026-08-31 : création de `Modelization_V2/`**, successeur propre et autonome ne gardant QUE
   la régression de Potts (aucune trace du double-mutant-scan). Migration sélective depuis V1 —
   quand un fichier était ambigu (notebook pas clairement propre de mutant-scan, ou dataset

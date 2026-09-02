@@ -161,7 +161,7 @@ class Lambda():
         
 
 class Protocol():
-    def __init__(self, N0, N1, dilution_factor, sequences, D, F_viab, J_viab, F_sel,
+    def __init__(self, key, N0, N1, dilution_factor, sequences, D, F_viab, J_viab, F_sel,
                  J_sel, noise_viab, noise_sel, multinomialNGS = False, alpha = alpha,
                  rho = rho, T_viab = T_viab, T_sel = T_sel, M = M,
                  K_MM = K_MM, K_MM_amp = K_MM_amp, phi = phi) -> None:
@@ -169,6 +169,7 @@ class Protocol():
         This class defined method for each block of the road map
 
         Variables :
+        - key               : a random jax key
         - N0                : number of sequences in the initial library
         - N1                : initial number of sequences sampled
         - dilution factor   : factor of dilution for sampling step in NGS
@@ -189,7 +190,7 @@ class Protocol():
         - K_MM_amp          : michaelis constant for bacterial_amplification()
         - phi               : NB dispersion for sequencing reads (ignored if multinomialNGS)
         """
-        self.key        = jax.random.key(42)
+        self.key        = key
         self.model      = "Potts"
         self.N0         = N0
         self.N1         = N1
