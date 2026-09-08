@@ -28,6 +28,7 @@ every notebook here builds or uses `F`/`J` exclusively via the joint Potts regre
 | `notebooks/AAV9_potts_regression.ipynb` | Builds the GT: joint ridge regression of `F`/`J` directly on real `aav9.csv` data. The source of `lib/aav9_{F,J}_viab_potts.npy`. |
 | `notebooks/AAV9_potts_GT_score_study.ipynb` | Uses that GT (loaded, not re-fit) to study the deterministic GT score and one simulated `Protocol` run against it. |
 | `notebooks/AAV9_potts_GT_fitting_protocol.ipynb` | Uses that GT to replay the manual-playground / population-size / cross-packaging checks against real `aav9.csv`. |
+| `notebooks/…/AAV9_poisson_regression_GT_score_study.ipynb` | A **rejected alternative**: infers the same Potts model by a Poisson (and Gamma) GLM instead of Gaussian ridge. Runs the score-study comparison — Poisson `r ≈ 0.75` vs ridge `0.89`. See "Tried and rejected" below. Writes gitignored `lib/aav9_{F,J}_viab_{poisson,gamma}.npy`. |
 | `notebooks/aav9.csv` | Raw real AAV9 NGS data all three notebooks read. Gitignored (`*.csv`), same as in `Modelization_V1` — present here locally, but on a fresh clone download it the same way (`aav-raw-ngs-data-v1` GitHub release, see the top-level `README.md`) and drop it in `Modelization_V2/notebooks/`. |
 | `lib/RegressionV1.py`, `lib/analysisV1.py`, `lib/sequence_classesV1.py`, `lib/initialize_weights.py`, `lib/cross_packaging_draft.py` | Infrastructure the three notebooks import (Potts regression, plotting/analysis helpers, the `Protocol` simulation engine, npy loaders, and the cross-packaging noise-source variant used in section 8 of the fitting-protocol notebook). None of these files contain double-mutant-scan code. |
 | `lib/aav9_F_viab_potts.npy` / `aav9_J_viab_potts.npy` | The Potts GT itself. |
@@ -111,8 +112,43 @@ all-zero design column (a cell with zero support) contributes zero to `XᵀX`'s 
 row/column, and the `+λI` term alone determines that coefficient, driving it to exactly 0 —
 no cell is guessed at from data that doesn't exist for it.
 
+### Tried and rejected: a Poisson-GLM fit
+
+Ridge least squares on `log(target)` **is** a maximum-likelihood fit — of a linear model with
+Gaussian noise on the log enrichment (`Modelization_V2/docs/GT_MLE_vs_pseudolikelihood.pdf`,
+gitignored, spells this out, and also why pseudo-likelihood / plmDCA does not apply here —
+that models `P(sequence)` over a sequence ensemble and ignores the measured label). The obvious alternative
+likelihood is a **Poisson**: model the fold-enrichment *ratio* `exp(target)` as
+`ratio ~ Poisson(exp(F·s + J·s·s + bias))`, i.e. a Tweedie GLM with a log link (`power=1`),
+fit by `RegressionV1.fit_weights_glm_from_data` and studied in
+`notebooks/notebooks/Viability/AAV9_poisson_regression_GT_score_study.ipynb` (the Gamma GLM,
+`power=2`, is fit alongside it as a second reference point).
+
+**It works clearly worse than the Gaussian ridge**, and on `aav9.csv` it is not really
+salvageable:
+
+| GT | `r`(deterministic GT score, real `target`) |
+|---|---|
+| ridge Potts (Gaussian-on-log, the default GT) | **0.889** |
+| Poisson GLM | 0.753 |
+| Gamma GLM | 0.759 |
+
+`F` still comes out close to the ridge GT (`r ≈ 0.92–0.95`), but `J` collapses (`r(J, J_potts)
+≈ 0.52`, couplings ~2× weaker). Cause: the Poisson deviance is scale-equivariant — with no
+real per-sequence read counts in `aav9.csv` to set an offset, the loss is entirely determined
+by the shape of the ratio distribution and is dominated by the handful of most-enriched
+sequences, so the bulk of the library barely constrains the fit. (One real upside: precisely
+*because* it is tail-weighted, the Poisson GT recovers the extreme top 1–10 % of the real
+`target` ranking better than the ridge GT does — but it loses badly on everything else.) A
+genuinely count-aware Poisson / Negative-Binomial fit would need raw plasmid/vector counts;
+`aav2.csv`/`aav5.csv` expose those, `aav9.csv` does not. The experimental weights
+(`lib/aav9_{F,J}_viab_{poisson,gamma}.npy`) are gitignored and no loader is wired up — the
+ridge Potts GT stays the project GT.
+
 ## Regenerating
 
-`AAV9_potts_regression.ipynb` is the only notebook that writes `.npy` files — re-run it (not
-the other two) to refresh `lib/aav9_F_viab_potts.npy`/`aav9_J_viab_potts.npy` after any change
-to `RegressionV1.py` or to `aav9.csv`.
+`AAV9_potts_regression.ipynb` writes the project GT — re-run it to refresh
+`lib/aav9_F_viab_potts.npy`/`aav9_J_viab_potts.npy` after any change to `RegressionV1.py` or
+to `aav9.csv`. `AAV9_poisson_regression_GT_score_study.ipynb` also writes `.npy`
+(`aav9_{F,J}_viab_{poisson,gamma}.npy`), but those are gitignored experimental weights, not a
+GT anything depends on.

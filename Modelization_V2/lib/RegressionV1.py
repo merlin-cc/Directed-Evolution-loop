@@ -311,6 +311,112 @@ def fit_weights_potts_from_data(seq_matrix, target, sample_weight=None, lambdas_
     return F_hat, J_hat, rank, info
 
 
+def fit_weights_glm_from_data(seq_matrix, target_ratio, power=1, alphas_grid=None,
+                               k_folds=3, seed=0, max_iter=500, cv_subsample=25_000,
+                               verbose=True):
+    """
+    Same Potts design (build_potts_features) and same F/J unpacking as
+    fit_weights_potts_from_data, but fit with a Tweedie GLM (log link) on a NON-NEGATIVE
+    enrichment RATIO target instead of ridge least squares on a log-enrichment target.
+
+        E[ratio(s)] = exp( F.s + J.s.s + bias ),   Var[ratio(s)] proportional to E[.]**power
+
+    power=1 -> Poisson deviance loss (variance proportional to mean). power=2 -> Gamma
+    (constant coefficient of variation). power=0 would be ordinary least squares (use
+    fit_weights_potts_from_data for that). The recovered F/J live on a log scale -- directly
+    comparable to fit_weights_potts_from_data's F/J, since that fits log(ratio) directly and
+    this fits log(E[ratio]).
+
+    Caveat for power=1 (Poisson): the Poisson objective is scale-equivariant -- multiplying
+    every target_ratio by a constant multiplies the whole deviance by that constant, leaving
+    argmin F/J unchanged. So with only a log-enrichment column (no real before/after read
+    counts to set a per-sequence offset), a Poisson fit on exp(log_enrichment) is entirely
+    determined by the shape of the ratio distribution, and its loss is dominated by the few
+    most-enriched sequences (largest ratio -> largest fitted mean -> largest IRLS weight).
+    A genuinely count-aware Poisson GT needs the raw plasmid/vector counts (aav2.csv/aav5.csv
+    expose these; aav9.csv does not).
+
+    Solver / cost: uses lbfgs, NOT newton-cholesky. newton-cholesky forms the p x p Hessian
+    (p = 8540 Potts features -> a 8540x8540 X^T W X every Newton step, ~1e12 flops each) and,
+    at small alpha where the rank-deficient design (826 never-co-observed cells) makes that
+    Hessian near-singular, grinds through max_iter steps -- a single fit can take an hour.
+    lbfgs is O(n*p) per iteration (~1e8 flops), so a fit is seconds-to-a-minute regardless of
+    alpha. CV is additionally run on a `cv_subsample`-row random subsample (alpha selection
+    does not need all ~69k rows); the final refit uses the full dataset.
+
+    seq_matrix   : (N, L) amino-acid indices, same convention as build_potts_features.
+    target_ratio : (N,) strictly non-negative fold-enrichment ratio (e.g. exp(aav9 target),
+                   or fit4functionaav9.csv's Production column). NOT a log enrichment.
+    cv_subsample : rows to subsample for the CV alpha sweep (None -> use all). The final fit
+                   always uses every row.
+
+    Returns
+    -------
+    F_hat, J_hat, info
+        info : dict with best alpha, its CV deviance curve, the alphas grid, n_obs, power.
+        (No `rank` slot, unlike fit_weights_potts_from_data -- a GLM's iteratively reweighted
+        design has no single fixed rank to report.)
+    """
+    from sklearn.linear_model import TweedieRegressor
+    from sklearn.metrics import mean_tweedie_deviance
+
+    target_ratio = np.asarray(target_ratio, dtype=np.float64)
+    if np.any(target_ratio < 0):
+        raise ValueError("target_ratio must be non-negative (it is a fold-enrichment ratio, "
+                         "not a log enrichment)")
+
+    if alphas_grid is None:
+        # Reaches lower than the ridge grid (down to 1e-3): both the Poisson and Gamma CV
+        # deviance on aav9 have their interior minimum around alpha 5e-3..3e-2, well below
+        # the ridge MSE's ~24 -- a 0.1 floor cuts off the real optimum. lbfgs (not
+        # newton-cholesky) makes these low alphas safe: it never forms the near-singular
+        # p x p Hessian, the rank-deficient directions just sit at 0 with zero gradient.
+        alphas_grid = np.logspace(-3, 2, 8)
+        if verbose:
+            print(f"alphas_grid was not defined thus alphas_grid = {alphas_grid}")
+
+    def _fit(alpha, Xtr, ytr):
+        m = TweedieRegressor(power=power, alpha=float(alpha), link="log",
+                             fit_intercept=True, max_iter=max_iter, tol=1e-6, solver="lbfgs")
+        m.fit(Xtr, ytr)
+        return m
+
+    X_full = build_potts_features(seq_matrix)
+    X = X_full[:, :-1]  # drop build_potts_features' bias column; TweedieRegressor fits its own intercept
+
+    if cv_subsample is not None and cv_subsample < X.shape[0]:
+        sub = np.random.default_rng(seed).choice(X.shape[0], size=cv_subsample, replace=False)
+        X_cv, y_cv = X[sub], target_ratio[sub]
+    else:
+        X_cv, y_cv = X, target_ratio
+
+    kf = KFold(n_splits=k_folds, shuffle=True, random_state=seed)
+    cv_dev = np.zeros(len(alphas_grid))
+    for tr, va in tqdm(list(kf.split(X_cv)), desc="GLM CV", leave=False):
+        for k, alpha in enumerate(alphas_grid):
+            m = _fit(alpha, X_cv[tr], y_cv[tr])
+            cv_dev[k] += mean_tweedie_deviance(y_cv[va], m.predict(X_cv[va]), power=power)
+    cv_dev /= kf.get_n_splits()
+    best_alpha = float(alphas_grid[np.argmin(cv_dev)])
+
+    if verbose:
+        fam = {1: "Poisson", 2: "Gamma"}.get(power, f"Tweedie(power={power})")
+        print(f"[{fam}] best alpha: {best_alpha:.4g}  (CV on {X_cv.shape[0]:,} rows)")
+        if best_alpha in (alphas_grid[0], alphas_grid[-1]):
+            edge = "lower" if best_alpha == alphas_grid[0] else "upper"
+            print(f"  WARNING: best alpha is at the {edge} grid boundary -- widen alphas_grid.")
+
+    final = _fit(best_alpha, X, target_ratio)
+
+    w = np.append(final.coef_, final.intercept_)  # [single-site | pairwise | bias] -- matches _unpack_potts_weights
+    F_hat, J_hat = _unpack_potts_weights(w, T=1.0, L=L, A=A)
+
+    info = dict(alpha=best_alpha, cv_deviance=cv_dev, alphas_grid=alphas_grid,
+                n_obs=X.shape[0], n_cv=X_cv.shape[0], power=power,
+                n_iter=int(np.max(final.n_iter_)), converged=bool(np.max(final.n_iter_) < max_iter))
+    return F_hat, J_hat, info
+
+
 def recover_weights_from_NGS(protocol, n_rounds=5, lambdas_grid=None, k_folds=5,
                               eps=0.5, seed=0, verbose=True):
     """

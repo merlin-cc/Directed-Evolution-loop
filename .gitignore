@@ -40,9 +40,40 @@ env/
 # for the download link. Derived .npy weight files (lib/aav*_{F,J}_viab_mlp.npy) are tiny and
 # ARE tracked, so the repo is runnable right after a fresh clone without regenerating those.
 *.csv
+*.tsv
+*.parquet
+*.feather
+*.xlsx
+*.xls
 *.h5
 *.hdf5
 *.pkl
+
+# CONFIDENTIAL IDV source data -- NEVER commit, NEVER push, NEVER upload anywhere.
+# Redundant with *.csv above (belt-and-suspenders): explicit named entries so the intent
+# survives any future change to the *.csv rule. Real NGS read counts + enrichment for the
+# AAV2/AAV5/AAV9 directed-evolution screens (viability: virus/plasmid; selectivity:
+# organoid/nuclei DNA & RNA vs virus). Hundreds of MB each.
+**/AAV2_organoides.csv
+**/AAV5_organoides.csv
+**/aav2.csv
+**/aav5.csv
+**/aav9.csv
+**/fit4functionaav9.csv
+**/*organoides*.csv
+
+# Local technical notes -- source of truth is the notebooks + README, these PDFs/tex are
+# regenerable write-ups, not tracked.
+Modelization_V2/docs/
+
+# Experimental GLM ground-truth weights (Poisson/Gamma) -- regenerable from
+# AAV9_poisson_regression_GT_score_study.ipynb, not a project default GT, not tracked.
+Modelization_V2/lib/aav9_*_viab_poisson.npy
+Modelization_V2/lib/aav9_*_viab_gamma.npy
+
+# AAV2/AAV5 Potts GT weights -- derived from confidential IDV organoid data, not tracked.
+Modelization_V2/lib/aav2_*_potts.npy
+Modelization_V2/lib/aav5_*_potts.npy
 
 # LaTeX auxiliary files
 *.aux

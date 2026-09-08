@@ -463,11 +463,48 @@ Directed-Evolution-loop/
 │                                        #   de module) — vérifié empiriquement (import frais + assertion sur __file__).
 │   ├── pyproject.toml                   # nom de package distinct (directed-evolution-modelization-v2), install
 │                                        #   éditable optionnelle (pas requise pour faire tourner les notebooks)
+│   ├── docs/                            # (créé 2026-09-07) GITIGNORÉ (Modelization_V2/docs/) — notes techniques
+│                                        #   locales (PDF + .tex source), contenu dérivé du README.md de V2 +
+│                                        #   AAV9_potts_regression.ipynb, rien de neuf côté code :
+│                                        #   - GT_construction_V2.pdf : comment la GT V2 est construite — régression ridge
+│                                        #     jointe (F+J) d'un modèle Potts contre le log enrichment réel d'aav9.csv, PAS
+│                                        #     de la pseudo-vraisemblance/plmDCA ; distingue les deux familles (Weigt 2009 vs
+│                                        #     Otwinowski&Plotkin 2014 / Rollins 2019).
+│                                        #   - GT_MLE_vs_pseudolikelihood.pdf : en quoi le fit ridge EST un MLE (moindres
+│                                        #     carrés = MLE gaussien, ridge = MAP/MLE pénalisé) et pourquoi la
+│                                        #     pseudo-vraisemblance n'est pas applicable (elle estime P(s) sur un ensemble de
+│                                        #     séquences et ignore les étiquettes ; ici données = paires (séquence, log
+│                                        #     enrichment) d'une librairie designée).
+│                                        #   - selectivity_aav2_aav5_session_brief.md (2026-09-07) : brief à coller dans une
+│                                        #     session fraîche pour traiter les données AAV2/AAV5 organoïdes (cf. ci-dessous).
+│   ├── notebooks/notebooks/Selectivity/  # (2026-09-07, ajout utilisateur) AAV2_organoides.csv (4.27M lignes, 34 col) +
+│                                        #   AAV5_organoides.csv (5.60M lignes, 35 col) — données NGS réelles IDV
+│                                        #   CONFIDENTIELLES, gitignorées (*.csv + entrées nommées explicites), NE JAMAIS
+│                                        #   committer/pousser/uploader. Viabilité : compte_plasmide/compte_virus +
+│                                        #   log2_enrichissement_virus_sur_plasmide (analogue du target aav9). Sélectivité :
+│                                        #   comptes organoïde/noyaux ADN&ARN + log2_enrichissement_*_{adn,arn}_sur_virus
+│                                        #   (3 réplicats organoïde, 2 noyaux, + moyenne). Contrairement à aav9, comptes
+│                                        #   bruts présents → permet enfin le GLM Poisson count-aware (offset log(plasmide)).
+│                                        #   Aucun notebook encore — plan complet dans docs/selectivity_aav2_aav5_session_brief.md.
 │   ├── lib/                             # copies de sequence_classesV1.py/analysisV1.py/RegressionV1.py/
 │                                        #   initialize_weights.py/cross_packaging_draft.py (aucune ne contient de
 │                                        #   mutant-scan) + aav9_{F,J}_viab_potts.npy (la nouvelle GT) +
 │                                        #   aav9_{F,J}_viab_mlp.npy (ancienne GT naïve, gardée UNIQUEMENT parce
-│                                        #   qu'AAV9_potts_regression.ipynb s'y compare en interne pour se valider)
+│                                        #   qu'AAV9_potts_regression.ipynb s'y compare en interne pour se valider) +
+│                                        #   aav9_{F,J}_viab_{poisson,gamma}.npy (2026-09-07, GT GLM expérimentales, gitignorées,
+│                                        #   écrites par AAV9_poisson_regression_GT_score_study.ipynb, PAS de loader).
+│                                        #   RegressionV1.py : ajout (2026-09-07) de fit_weights_glm_from_data(seq_matrix,
+│                                        #   target_ratio, power) — même design Potts / unpacking F,J que
+│                                        #   fit_weights_potts_from_data, mais fit via un GLM Tweedie log-link sur un RATIO
+│                                        #   d'enrichissement non-négatif au lieu d'une ridge gaussienne sur le log
+│                                        #   enrichment. power=1 → Poisson, power=2 → Gamma. Solver lbfgs (PAS
+│                                        #   newton-cholesky : celui-ci forme la hessienne 8540×8540 et, aux petits alpha
+│                                        #   que ces données veulent, tourne jusqu'à max_iter → ~1h/fit) ; CV sur un
+│                                        #   sous-échantillon de 25k lignes, refit final sur tout ; grille alpha défaut
+│                                        #   logspace(-3,2,8) (minimum CV intérieur vers alpha≈5e-3, bien sous les ~24 de
+│                                        #   la ridge). ~1-2 min/famille. Caveat docstring : objectif Poisson
+│                                        #   scale-équivariant → sans comptages réels (offset), fit dominé par la queue
+│                                        #   enrichie ; r(score,target réel) ≈ 0.75 (Poisson) / 0.76 (Gamma) vs 0.89 (ridge).
 │   └── notebooks/                       # AAV9_potts_regression.ipynb (construit la GT), AAV9_potts_GT_score_study.ipynb,
 │       │                                #   AAV9_potts_GT_fitting_protocol.ipynb + aav9.csv — les 3 seuls notebooks du
 │       │                                #   projet trouvés à la fois propres de mutant-scan ET déjà sur la GT Potts.
@@ -478,7 +515,21 @@ Directed-Evolution-loop/
 │                                        #   AAV9_fit4function_potts_vs_mlp.ipynb, AAV9_potts_simulated_replicate_stochasticity.ipynb,
 │                                        #   discordant_variants_aav9.ipynb). Tous ces notebooks localisent lib/ en remontant
 │                                        #   jusqu'à Modelization_V2/ (pas de "../../lib" en dur), justement pour survivre à ce
-│                                        #   genre de déplacement.
+│                                        #   genre de déplacement. NB : AAV9_potts_regression.ipynb/AAV9_potts_GT_score_study.ipynb
+│                                        #   (les plus anciens) utilisent ENCORE le "../../lib" en dur qui, depuis ce sous-dossier,
+│                                        #   ne pointe nulle part → import silencieux du lib pip-installé de Modelization_V1
+│                                        #   (bug pré-existant repéré 2026-09-07, non corrigé).
+│                                        # AAV9_poisson_regression_GT_score_study.ipynb (2026-09-07) : rejoue
+│                                        #   AAV9_potts_GT_score_study.ipynb (heatmaps J, distribution du score GT sur la
+│                                        #   librairie réelle, recovery par percentile, target1 simulé, overlays) mais avec
+│                                        #   une GT construite par GLM Tweedie log-link (RegressionV1.fit_weights_glm_from_data)
+│                                        #   sur le RATIO exp(target) au lieu de la ridge gaussienne sur le log enrichment :
+│                                        #   Poisson (power=1, le sujet) + Gamma (power=2, référence) + ridge Potts (incumbent)
+│                                        #   comparés côte à côte. r(score GT, target réel) ≈ 0.75 (Poisson, alpha≈5e-3) /
+│                                        #   0.76 (Gamma, alpha≈3e-2) / 0.89 (ridge Potts) — les deux GLM traînent (~-0.13
+│                                        #   en r) car l'objectif Poisson scale-équivariant est dominé par la queue enrichie
+│                                        #   (pas de comptages → pas d'offset). Écrit aav9_{F,J}_viab_{poisson,gamma}.npy
+│                                        #   (gitignorés, pas de loader). ~5-8 min à exécuter (lbfgs, CV sur sous-éch. 25k).
 │                                        # AAV9_cross_packaging_parameter_sweeps.ipynb (2026-09-02) : sweeps de paramètres du
 │                                        #   protocole avec cross-packaging SEUL (ProtocolCrossPackagingBackground, pas
 │                                        #   d'hallucination ni de mutations PCR ; cross_packaging_rate=0 redonne exactement
@@ -545,6 +596,24 @@ Directed-Evolution-loop/
 │                                        #   points de sweep. Tout est en log2 des deux côtés. NON EXÉCUTÉ (demande explicite de
 │                                        #   l'utilisateur) — sorties de cellules vides, à lancer avant de faire confiance à un
 │                                        #   chiffre ; compter ~30 min sur GPU pour les 30 points de sweep.
+│                                        # test_for_sweep.ipynb (2026-09-07) : LE notebook de sweep de paramètres de référence
+│                                        #   (le style de courbes validé "ensemble" avec l'utilisateur). GT Potts, données
+│                                        #   fit4functionaav9.csv, ProtocolCrossPackagingBackground. Diffère de
+│                                        #   AAV9_cross_packaging_parameter_sweeps.ipynb : PAS de surrogate Potts ni de scan
+│                                        #   full-space — un échantillon FIXE de 10M variants tirés de 20^7, l'over-recouvrement
+│                                        #   top-k MLP↔GT y est une intersection d'ensembles exacte (argsort), le log enrichment
+│                                        #   du MLP n'est jamais converti en score. 3 figures par sweep : plot_distributions
+│                                        #   (réel vs protocole vs MLP, un panneau/valeur, recalé médiane), plot_recovery (r /
+│                                        #   top-10% / top-1000 vs le param, protocole & MLP, + plafond réplicat + baseline
+│                                        #   REAL_MLP_BASELINE=MLP entraîné sur la vraie Production1), plot_topk_recovery
+│                                        #   (recouvrement exact top-k MLP↔GT vs k + aux profondeurs GT_RECOVERY_DEPTHS).
+│                                        #   7 sweeps : dilution_factor, initial diversity d0 (2026-09-07, sous-échantillonne
+│                                        #   la librairie réelle, reconstruit split+protocole+MLP par point, mu tenu donc
+│                                        #   N1=mu*d0/rho, D FIXE donc reads/variant monte quand d0 baisse ; fig 2 top-1000 sature
+│                                        #   à petit d0 quand le test fold < 1000 → fig 3 est la figure comparable pour ce sweep),
+│                                        #   cross_packaging_rate, mu, T_viab, noise_viab, D. Baseline test_for_sweep : D=1e8,
+│                                        #   dilution_factor=1e6 (≠ cross_packaging_parameter_sweeps qui a D=1e9). Résumé combiné
+│                                        #   exporté → parameter_sweeps_summary.csv (export, jamais rechargé). ~45-55 min GPU.
 └── V0_prototype/                        # prototype première génération, gardé pour l'historique — imports déjà cassés, pas maintenu
 ```
 
