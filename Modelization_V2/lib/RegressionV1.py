@@ -43,7 +43,7 @@ from tqdm.auto import tqdm
 from sequence_classesV1 import *
 from analysisV1 import pearson, precision_at_k
 
-message = "file regression 1.4"
+message = "file regression 1.5"
 
 L = 7   # num_positions, matches Protocol.compute_score's hardcoded range(7)
 A = 20  # num_amino_acids
@@ -218,7 +218,7 @@ def fit_weights_potts(X, y, T, L=L, A=A, lam=1.0, sample_weight=None):
     return _unpack_potts_weights(w, T, L=L, A=A)
 
 
-def fit_weights_potts_unregularized(X, y, T, L=L, A=A):
+def fit_weights_potts_unregularized(X, y, T, L=L, A=A, sample_weight=None):
     """
     Ordinary least squares (no L2 penalty) fit of the pooled log-ratio
     targets, then unpack the flat weight vector back into (F_hat, J_hat)
@@ -231,12 +231,21 @@ def fit_weights_potts_unregularized(X, y, T, L=L, A=A):
     avoid. lstsq instead returns the minimum-norm least-squares solution,
     which is well-defined even when X^T X is singular.
 
+    sample_weight : optional (N,) per-observation weights -- solves the weighted
+        least-squares problem by scaling each row of (X, y) by sqrt(w). None
+        (default) reproduces the original unweighted OLS exactly.
+
     Returns
     -------
     F_hat, J_hat, rank : recovered tensors plus the numerical rank of X
         (rank < X.shape[1] flags a rank-deficient / non-unique OLS fit).
     """
-    w, _residuals, rank, _sv = np.linalg.lstsq(X, y, rcond=None)
+    if sample_weight is None:
+        Xw, yw = X, y
+    else:
+        sw = np.sqrt(np.asarray(sample_weight, dtype=np.float64))
+        Xw, yw = sw[:, None] * X, sw * y
+    w, _residuals, rank, _sv = np.linalg.lstsq(Xw, yw, rcond=None)
     F_hat, J_hat = _unpack_potts_weights(w, T, L=L, A=A)
     return F_hat, J_hat, rank
 
@@ -245,7 +254,7 @@ def fit_weights_potts_unregularized(X, y, T, L=L, A=A):
 #######################################################################################
 
 def fit_weights_potts_from_data(seq_matrix, target, sample_weight=None, lambdas_grid=None,
-                                 k_folds=5, seed=0, verbose=True):
+                                 k_folds=5, seed=0, verbose=True, lam=None):
     """
     Ridge-fit F/J directly on an observed (sequence, target) dataset -- e.g. real aav9.csv
     (one row per sequence, target already a real log enrichment) -- instead of a Protocol
@@ -267,6 +276,12 @@ def fit_weights_potts_from_data(seq_matrix, target, sample_weight=None, lambdas_
                     given, both the CV loop and the final fit solve the weighted normal
                     equations (X.T @ diag(w) @ X + lam*I) beta = X.T @ diag(w) @ y instead of
                     the unweighted ones.
+    lam           : optional fixed L2 penalty. None (default) picks lambda by K-fold CV over
+                    lambdas_grid (original behavior). lam=0 skips CV and does a minimum-norm
+                    (SVD lstsq) unregularized fit -- use this when CV keeps landing on a huge
+                    lambda that just shrinks everything to the mean. lam>0 skips CV and fits
+                    at exactly that penalty. When lam is not None, info["cv_mse"] /
+                    info["lambdas_grid"] are None.
 
     Returns
     -------
@@ -280,11 +295,23 @@ def fit_weights_potts_from_data(seq_matrix, target, sample_weight=None, lambdas_
     """
     if lambdas_grid is None:
         lambdas_grid = np.logspace(-1, 2, 30)
-        if verbose:
+        if verbose and lam is None:
             print(f"lambdas_grid was not defined thus lambdas_grid = {lambdas_grid}")
 
     X = build_potts_features(seq_matrix)
     y = np.asarray(target, dtype=np.float64)
+
+    if lam == 0.0:
+        # the fit below IS an lstsq -- do it once here and read rank off it, instead of
+        # running a second (unweighted) lstsq just for the rank diagnostic.
+        if verbose:
+            print("lam=0 -> minimum-norm unregularized (lstsq) fit, CV skipped")
+        F_hat, J_hat, rank = fit_weights_potts_unregularized(
+            X, y, T=1.0, sample_weight=sample_weight)
+        if verbose:
+            print(f"Design matrix rank: {rank} / {X.shape[1]} features ({X.shape[0]} obs)")
+        info = dict(lam=0.0, cv_mse=None, lambdas_grid=None, n_obs=X.shape[0])
+        return F_hat, J_hat, rank, info
 
     _, _, rank = fit_weights_potts_unregularized(X, y, T=1.0)
     if verbose:
@@ -293,21 +320,29 @@ def fit_weights_potts_from_data(seq_matrix, target, sample_weight=None, lambdas_
             print("  NOTE: rank-deficient design (p > n) -- ridge is not just a preference, "
                   "the unregularized fit below is non-unique.")
 
-    kf = KFold(n_splits=k_folds, shuffle=True, random_state=seed)
-    cv_mse   = ridge_cv_mse_potts(X, y, lambdas_grid, kf, sample_weight=sample_weight,
-                                   desc="Ridge CV (aav9)")
-    best_lam = float(lambdas_grid[np.argmin(cv_mse)])
+    if lam is None:
+        kf = KFold(n_splits=k_folds, shuffle=True, random_state=seed)
+        cv_mse   = ridge_cv_mse_potts(X, y, lambdas_grid, kf, sample_weight=sample_weight,
+                                       desc="Ridge CV (aav9)")
+        best_lam = float(lambdas_grid[np.argmin(cv_mse)])
 
+        if verbose:
+            print(f"Best lambda: {best_lam:.4f}")
+            if best_lam in (lambdas_grid[0], lambdas_grid[-1]):
+                edge = "lower" if best_lam == lambdas_grid[0] else "upper"
+                print(f"  WARNING: best lambda is at the {edge} grid boundary ({best_lam:.4g}) "
+                      f"-- the true optimum may lie outside lambdas_grid; widen it.")
+
+        F_hat, J_hat = fit_weights_potts(X, y, T=1.0, lam=best_lam, sample_weight=sample_weight)
+        info = dict(lam=best_lam, cv_mse=cv_mse, lambdas_grid=lambdas_grid, n_obs=X.shape[0])
+        return F_hat, J_hat, rank, info
+
+    best_lam = float(lam)  # lam == 0.0 is handled by the early return above
     if verbose:
-        print(f"Best lambda: {best_lam:.4f}")
-        if best_lam in (lambdas_grid[0], lambdas_grid[-1]):
-            edge = "lower" if best_lam == lambdas_grid[0] else "upper"
-            print(f"  WARNING: best lambda is at the {edge} grid boundary ({best_lam:.4g}) "
-                  f"-- the true optimum may lie outside lambdas_grid; widen it.")
-
+        print(f"lam={best_lam:.4g} (fixed) -> ridge fit, CV skipped")
     F_hat, J_hat = fit_weights_potts(X, y, T=1.0, lam=best_lam, sample_weight=sample_weight)
 
-    info = dict(lam=best_lam, cv_mse=cv_mse, lambdas_grid=lambdas_grid, n_obs=X.shape[0])
+    info = dict(lam=best_lam, cv_mse=None, lambdas_grid=None, n_obs=X.shape[0])
     return F_hat, J_hat, rank, info
 
 

@@ -485,7 +485,106 @@ Directed-Evolution-loop/
 │                                        #   comptes organoïde/noyaux ADN&ARN + log2_enrichissement_*_{adn,arn}_sur_virus
 │                                        #   (3 réplicats organoïde, 2 noyaux, + moyenne). Contrairement à aav9, comptes
 │                                        #   bruts présents → permet enfin le GLM Poisson count-aware (offset log(plasmide)).
-│                                        #   Aucun notebook encore — plan complet dans docs/selectivity_aav2_aav5_session_brief.md.
+│                                        #   Plan complet dans docs/selectivity_aav2_aav5_session_brief.md. Sous-dossiers
+│                                        #   AAV5/ (AAV5_organoides.csv + notebooks), AAV2/ à venir.
+│                                        # AAV5/AAV5_SEL_analysis.ipynb : analyse des hyperparamètres (D par checkpoint,
+│                                        #   classements de comptage, contamination 7m8) + régression Potts GT viab +
+│                                        #   sélectivité (3 réplicats organoïde). Section 3 : `R.fit_weights_potts_from_data`
+│                                        #   avec `LAM` configurable — la CV tombait sur des λ énormes (1e3–2e5) qui écrasent
+│                                        #   F/J, donc passé à `LAM=0.0` (fit non régularisé lstsq). Export tagué
+│                                        #   `aav5_{F,J}_{name}_potts_{unreg|lam<x>|cv}.npy` (ne réécrit plus les fichiers λ-CV).
+│                                        # AAV5/AAV5_SEL_potts_regression.ipynb (2026-09-09) : récupération dédiée des poids
+│                                        #   de Potts sur le CSV de TRAVAIL (AAV5_organoides_sorted.csv), 4 cibles = viab +
+│                                        #   sel_org{1,2,3}, un fit indépendant chacune (fit_weights_potts_from_data,
+│                                        #   LAM=0.0 OLS min-norm, poids inverse-variance, split 50/50, N_FIT=80k/N_EVAL=150k).
+│                                        #   Visus : diag CV/hexbin held-out, heatmaps F + mean|J_ij| + top paires couplées,
+│                                        #   histos score GT sur les 3.82M variants, r(F/J sel vs viab) + accord réplicats +
+│                                        #   hexbin score sel vs viab (régime), recouvrement top-k réplicats, résidus.
+│                                        #   Résultats (held-out r) : viab +0.204 (faible — le cap plasmide≤500 du CSV de
+│                                        #   travail retire la large dynamique qui portait le signal viab, cf. +0.246 sur le
+│                                        #   CSV brut dans AAV5_SEL_analysis), sel_org1 +0.142 (n_finite 79k seulement),
+│                                        #   sel_org2 +0.399, sel_org3 +0.360 ; org2/org3 s'accordent (r(F)=+0.85, top-50k
+│                                        #   ∩ 0.75), org1 est l'outlier (r(F)~0.4) ; sélectivité faiblement ANTIcorrélée à
+│                                        #   la viabilité (r(F_sel,F_viab) ≈ -0.25 pour org2/org3). Exporte
+│                                        #   aav5_{F,J}_{name}_potts_sorted_unreg.npy (gitignorés ; suffixe sorted_ distinct
+│                                        #   des exports de AAV5_SEL_analysis qui fittent sur le CSV brut). Partie 1 exécutée
+│                                        #   (nbconvert). PARTIE 2 (§8-11, ajoutée 2026-09-09, NON exécutée — CV lente, ~10-20
+│                                        #   min/cible) : rejoue les 4 fits avec CV K-fold sur λ (lam=None, mêmes splits que
+│                                        #   la partie 1 via RNG rejoué), diag CV MSE vs λ + hexbin, table comparant λ=0 vs CV
+│                                        #   (r held-out, r(F,F_cv)/r(J,J_cv), r(score), top-500 ∩), histos score superposés,
+│                                        #   export aav5_{F,J}_{name}_potts_sorted_cv.npy.
+│                                        # AAV5/AAV5_SEL_potts_readout_depth.ipynb (2026-09-09) : DIAGNOSTIC du « la CV
+│                                        #   n'arrive pas à fitter la sélectivité ». Constat clé : le tri de la §5 filtre
+│                                        #   compte_plasmide (axe VIABILITÉ) mais la cible sélectivité = log2(organoïde_adn/
+│                                        #   virus) et NI le num NI le dénom n'ont été filtrés (compte organoïde médian 2/19/55
+│                                        #   selon réplicat parmi les y finis, compte_virus médian 9). MÉTHODE INCHANGÉE (Potts,
+│                                        #   moindres carrés gaussiens, ridge L2, mêmes poids inverse-variance) — seule la
+│                                        #   constitution du jeu de fit change : garder compte_organoïde_adn ≥ T ET
+│                                        #   compte_virus ≥ T, balayer T ∈ {0,5,10,20,30,50,100}. Cibles sel_org2/sel_org3
+│                                        #   (org1 = outlier, écarté). §1 plafond r(y2,y3) vs T (0.70 → 0.88 à ≥10 → 0.93 à
+│                                        #   ≥30). §2 sweep λ=0 (EXÉCUTÉ par l'utilisateur) : r_self org2 0.39→0.53→0.64
+│                                        #   (T 0→20→50), r(F2,F3) 0.87→0.96, r(J2,J3) 0.60→0.78 — le filtrage marche. §3 CV
+│                                        #   grille λ ÉLARGIE np.logspace(-4,8,21), T∈{0,20,50}, vérifie si λ* devient
+│                                        #   intérieur. §4 heatmaps F/J T=0 vs T=20. §5 coût en diversité. §6 fit MUTUALISÉ
+│                                        #   org2+org3 à T_CHOSEN=20 (λ=0 + CV), export lib/aav5_{F,J}_sel_pool_potts_sorted_
+│                                        #   readoutT20_unreg.npy (gitignoré). §7 SCATTER score prédit vs log2 enrichment réel
+│                                        #   held-out (hexbin + moy(y) par bin ±σ + Pearson/Spearman), 2×2 pool/individuel.
+│                                        #   §3/§6 pas encore ré-exécutés après passage à T=20 + grille élargie. §6 (T=20)
+│                                        #   a bien tourné une fois → aav5_{F,J}_sel_pool_potts_sorted_readoutT20_unreg.npy
+│                                        #   existent (plus les _readoutT30_ d'une version antérieure).
+│                                        # AAV5/AAV5_SEL_fitting_protocol.ipynb (2026-09-09) : pendant AAV5 d'
+│                                        #   AAV9_potts_GT_fitting_protocol.ipynb — branche les poids Potts récupérés sur
+│                                        #   sequence_classesV1.ProtocolV3 et simule UN round loop_DE(), compare le simulé aux
+│                                        #   vraies mesures. Corresp. : lambda0p↔compte_plasmide, lambda2p↔compte_virus
+│                                        #   (produce_capsids/F_viab), lambda3p↔compte_organoide_i_adn (selectivity/F_sel).
+│                                        #   Poids : viab = aav5_{F,J}_viab_potts_sorted_unreg.npy (r≈0.20, faible), sél =
+│                                        #   aav5_{F,J}_sel_pool_potts_sorted_readoutT20_unreg.npy (pool org2+org3 T≥20).
+│                                        #   Sous-éch. D0_SIM=400k (loop_DE sur 3.82M trop lourd), priorité aux variants avec
+│                                        #   vraie mesure sél + fond aléatoire. §1 score GT déterministe vs réel (plafond),
+│                                        #   §2 config ProtocolV3 (mu=50/T_viab=T_sel=1/ln2/noise=0.5/D=1e8 — NON calibrés,
+│                                        #   repris d'AAV9 ; T=1/ln2 = seul choix motivé, auto-cohérence 2^score) + 3 rounds
+│                                        #   (clés diff.) pour 3 réplicats sél simulés, §3 dist viab réel vs protocole
+│                                        #   (histos recalés médiane + hexbin), §4 dist sél org2/org3 réel vs protocole +
+│                                        #   scatter + accord réplicat-réplicat simulé vs réel, §5 RECOVERY meilleurs variants
+│                                        #   (percentile precision_at_k : vrai top-k% retrouvé par score GT vs log enr simulé,
+│                                        #   viab + org2 + org3), §6 population par checkpoint. Smoke-test OK (sim_viab std
+│                                        #   1.37 / sim_sel std 1.80 vs réel ~2.5/2.9 → distributions simulées plus étroites,
+│                                        #   attendu vu poids faibles + params non calibrés). NON exécuté en entier (~10-15
+│                                        #   min : 3× loop_DE sur 400k). Piste ouverte : recherche mu/T/noise/D contre AAV5.
+│                                        # AAV5/AAV5_SEL_sorting.ipynb (2026-09-09) : notebook de tri/nettoyage du dataset
+│                                        #   AAV5. Charge AAV5_organoides.csv, calcule la distance de Hamming de chaque
+│                                        #   variant au 7m8 (LGETTRP) une fois. (1) classements comptage-vs-rang log-log par
+│                                        #   colonne (plasmide/virus/organoïde adn) avec 7m8+mutants-1 marqués — au top du
+│                                        #   plasmide, effondrés après viabilité. (2) histogrammes des log2 enrichments bruts
+│                                        #   (viab + 3 sélectivité), fraction finie par panneau (bins, jamais KDE). (3) table
+│                                        #   des variants hamming≤2 du 7m8 triés par comptage plasmide (274 variants : 66 à
+│                                        #   1 mut, 207 à 2) + top-30 plasmide annoté `lié_7m8` (révèle d'AUTRES contaminants
+│                                        #   -- NB §1 écrit aussi AAV5_organoides_classements.csv (~380 Mo, gitignoré) :
+│                                        #   1 ligne/variant, rang (1 = plus abondant, ex-aequo method="min") dans plasmide/
+│                                        #   virus/organoïde adn 1-2-3, trié par rang plasmide --
+│                                        #   à hamming 5-7, ex. TPANSTK/IADNRVS, virus élevé + log enr ≈8 — vrais binders ou
+│                                        #   autres spike-ins, PAS des misreads 7m8) ; masque `contam_mask` proposé (hamming≤2
+│                                        #   ET plasmide≥5e3, + 7m8 lui-même = 4 variants) NON sauvegardé. (4) comptage des
+│                                        #   variants à faible profondeur : viab<5 (plasmide ET virus) = 710 613 (12.7%),
+│                                        #   sel<5 (organoïde 1&2&3) = 5.13M (91.7% — les comptes ADN organoïde sont
+│                                        #   quasi tous <5), les deux stricts = 703 743 (12.6%). (5) CSV DE TRAVAIL :
+│                                        #   retire hamming≤2 du 7m8 (274) ∪ comptage plasmide hors [10, 500] (1 773 022)
+│                                        #   → 1 773 143 retirés, 3 822 400 conservés (68.3%) ; histogrammes log enr brut
+│                                        #   vs trié ; écrit AAV5_organoides_sorted.csv (~389 Mo, gitignoré
+│                                        #   **/*organoides*.csv) — LE csv de travail du projet AAV5 sélectivité (bornes
+│                                        #   plasmide fixées après les explorations §6/§7).
+│                                        #   (6) balayage du seuil bas de comptage plasmide (20→100 par 10, 7m8 hamming≤2
+│                                        #   toujours retiré) : diversité conservée chute vite — plasmide≥20 → 2 240 457,
+│                                        #   ≥50 → 343 369, ≥100 → 20 029 (brut 5 595 543) ; retirer en plus plasmide>500
+│                                        #   ne coûte que ~87 variants (seulement 105 variants au-dessus de 500 en tout).
+│                                        #   Par seuil : distributions log2 enr (overlay + grille 9×4, backdrop brut) +
+│                                        #   table stats — quand le seuil plasmide monte, viab_med chute (-0.59 → -2.09 de
+│                                        #   20 à 100) et sel_frac_fini monte (0.13 → 0.23). (7) symétrique : borne inf
+│                                        #   fixée à 10, borne SUP décroissante (500→20) sur la fenêtre 10≤plasmide≤sup ;
+│                                        #   perte quasi nulle jusqu'à sup=150 (3.82M), puis 3.20M à sup=40, 1.65M à sup=20
+│                                        #   (beaucoup de variants ont un comptage plasmide 10-20) ; viab_med REMONTE
+│                                        #   (-0.15 → +0.55) en retirant les variants très abondants (qui se dépletent).
+│                                        #   §6 et §7 ne réécrivent PAS le CSV (exploration seule). Exécuté (nbconvert).
 │   ├── lib/                             # copies de sequence_classesV1.py/analysisV1.py/RegressionV1.py/
 │                                        #   initialize_weights.py/cross_packaging_draft.py (aucune ne contient de
 │                                        #   mutant-scan) + aav9_{F,J}_viab_potts.npy (la nouvelle GT) +
@@ -530,6 +629,21 @@ Directed-Evolution-loop/
 │                                        #   en r) car l'objectif Poisson scale-équivariant est dominé par la queue enrichie
 │                                        #   (pas de comptages → pas d'offset). Écrit aav9_{F,J}_viab_{poisson,gamma}.npy
 │                                        #   (gitignorés, pas de loader). ~5-8 min à exécuter (lbfgs, CV sur sous-éch. 25k).
+│                                        # AAV9_viab_potts_lam0_vs_cv.ipynb (2026-09-09) : pendant AAV9 d'
+│                                        #   AAV5_SEL_potts_regression.ipynb — même procédé λ=0 (OLS min-norm) vs CV sur λ,
+│                                        #   ici sur la viabilité aav9.csv (68 776 variants, split 50/50 random_state=0).
+│                                        #   Diag CV MSE vs λ + hexbin held-out, heatmaps F/mean|J_ij|, histos score GT sur les
+│                                        #   68 776 variants (λ=0 / CV / GT projet superposés), table r held-out + r(F)/r(J
+│                                        #   off-diag)/r(score) + recouvrement top-k, résidus. RÉSULTAT (le point de l'exo) :
+│                                        #   contrairement à AAV5, λ=0 et CV donnent quasi la même chose — r held-out 0.838
+│                                        #   (λ=0) vs 0.847 (CV λ=23.95, minimum INTÉRIEUR propre, pas au bord de grille),
+│                                        #   r(F)=1.00 r(J off-diag)=0.988 r(score)=0.991 entre les deux, top-500 ∩ 0.75.
+│                                        #   AAV9 est confortablement en régime n>p (68 776 obs, rang 7715/8541) donc l'OLS
+│                                        #   est déjà bien conditionné ; la pathologie AAV5 (CV → λ 1e3-2e5 au bord, écrase
+│                                        #   F/J) vient de n_eff << p sur des cibles log-ratio très bruitées. GT projet
+│                                        #   (fit données complètes) r=0.887 mais optimiste (inclut idx_test). Corrige le
+│                                        #   `../../lib` en dur (→ V1 sans arg `lam`) par la remontée vers Modelization_V2/lib.
+│                                        #   CV ~14 min (5 folds × ~3 min). Exécuté (nbconvert). Pas d'export de poids.
 │                                        # AAV9_cross_packaging_parameter_sweeps.ipynb (2026-09-02) : sweeps de paramètres du
 │                                        #   protocole avec cross-packaging SEUL (ProtocolCrossPackagingBackground, pas
 │                                        #   d'hallucination ni de mutations PCR ; cross_packaging_rate=0 redonne exactement
@@ -638,6 +752,19 @@ jamais un « score » (ne pas écrire "predicted score", "F_score", "J_score", "
 
 ## État actuel
 
+- **2026-09-09 : `fit_weights_potts_from_data` accepte un `lam` fixe (RegressionV1.py V2).**
+  `lam=None` (défaut) garde la sélection par CV ; `lam=0` fait un fit minimum-norm non
+  régularisé (lstsq SVD, `fit_weights_potts_unregularized` — qui accepte maintenant aussi
+  `sample_weight`, lstsq pondéré par `sqrt(w)`) ; `lam>0` fitte à cette pénalité sans CV. Dans
+  ces deux derniers cas `info["cv_mse"]`/`info["lambdas_grid"]` valent `None`. Motivation :
+  dans `AAV5_SEL_analysis.ipynb` (section 3), la CV tombait systématiquement sur des λ énormes
+  (1e3–2e5) qui rétrécissent F/J vers la moyenne et tuent le signal → le notebook passe
+  maintenant `LAM=0.0`. Message du module `RegressionV1.py` (V2 uniquement) bumpé 1.4→1.5. La
+  copie `Modelization_V1/lib/RegressionV1.py` n'est PAS modifiée. **Système d'export des poids
+  AAV5 changé** : `AAV5_SEL_analysis.ipynb` écrit désormais `aav5_{F,J}_{name}_potts_{tag}.npy`
+  avec `tag` ∈ {`unreg`, `lam<x>`, `cv`} dérivé de `LAM` — les fichiers historiques
+  `aav5_{F,J}_{name}_potts.npy` (λ CV) ne sont plus écrasés. `.gitignore` élargi
+  `aav5_*_potts.npy`→`aav5_*_potts*.npy` (idem aav2) pour couvrir le suffixe de tag.
 - **2026-08-31 : `T_viab=1.3` est la température de base pour la GT Potts** (précisé par
   l'utilisateur), **PAS `T_viab=0.8`** — 0.8 reste la valeur dérivée pour l'ANCIENNE GT naïve
   dans `AAV9_fitting_protocol.ipynb` (partie 2, recherche contre l'ancienne GT), jamais

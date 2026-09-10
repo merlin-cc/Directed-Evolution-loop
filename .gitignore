@@ -72,8 +72,9 @@ Modelization_V2/lib/aav9_*_viab_poisson.npy
 Modelization_V2/lib/aav9_*_viab_gamma.npy
 
 # AAV2/AAV5 Potts GT weights -- derived from confidential IDV organoid data, not tracked.
-Modelization_V2/lib/aav2_*_potts.npy
-Modelization_V2/lib/aav5_*_potts.npy
+# (trailing * catches the _{unreg,lamX,cv} penalty tag suffix from AAV5_SEL_analysis.ipynb)
+Modelization_V2/lib/aav2_*_potts*.npy
+Modelization_V2/lib/aav5_*_potts*.npy
 
 # LaTeX auxiliary files
 *.aux
