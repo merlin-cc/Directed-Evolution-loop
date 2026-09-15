@@ -501,7 +501,10 @@ Directed-Evolution-loop/
 │                                        #   (3 réplicats organoïde, 2 noyaux, + moyenne). Contrairement à aav9, comptes
 │                                        #   bruts présents → permet enfin le GLM Poisson count-aware (offset log(plasmide)).
 │                                        #   Plan complet dans docs/selectivity_aav2_aav5_session_brief.md. Sous-dossiers
-│                                        #   AAV5/ (AAV5_organoides.csv + notebooks), AAV2/ à venir.
+│                                        #   AAV5/ (AAV5_organoides.csv + notebooks), AAV2/ (AAV2_organoides.csv +
+│                                        #   notebooks, premier notebook `AAV2_viab_sorting.ipynb` le 2026-09-14, cf.
+│                                        #   son entrée dédiée plus bas — travail focalisé viabilité uniquement, pas
+│                                        #   de notebook sélectivité AAV2 pour l'instant).
 │                                        #   ⚠ RÉORGANISATION (2026-09-11, décision utilisateur) : AAV5/ ne garde comme
 │                                        #   notebook ACTIF que `AAV5_SEL_potts_readout_depth.ipynb` — c'est celui qui
 │                                        #   donne la meilleure corrélation trouvée sur AAV5 cette session (sel_org2
@@ -690,6 +693,356 @@ Directed-Evolution-loop/
 │                                        #   sur les 3 réplicats n'ajoute rien pour une cible sel donnée (il aurait fallu
 │                                        #   filtrer par réplicat spécifique, pas en union, pour espérer un effet sur sel).
 │                                        #   Exécuté (nbconvert, GPU, ~10-12 min pour les 12 entraînements).
+│                                        #   ⚠ MISE À JOUR (2026-09-14) : `AAV5_SEL_analysis.ipynb` réactivé (sorti
+│                                        #   d'`obsolete/`, geste de l'utilisateur hors de cette session — raison non
+│                                        #   documentée) ; `AAV5_SEL_deep_profile_model_sel_org2.ipynb` **supprimé** du
+│                                        #   dossier actif par l'utilisateur après comparaison jugée non concluante (Deep
+│                                        #   moins bon que Shallow sur `sel_org2`, cf. son entrée ci-dessous — une copie
+│                                        #   non exécutée de 2026-09-11 subsiste dans `obsolete/`) ; `AAV5_organoides_
+│                                        #   classements.csv` (379 Mo, cache de classement de `AAV5_SEL_sorting.ipynb` §1)
+│                                        #   et `AAV5_organoides_sorted_organoide.csv` (75 Mo, filtre "≥1 count organoïde"
+│                                        #   de sa §8) supprimés — plus référencés par aucun notebook actif (seuls
+│                                        #   `AAV5/obsolete/AAV5_SEL_sorting.ipynb` et
+│                                        #   `AAV5/obsolete/AAV5_SEL_profile_model_before_after_sorting.ipynb`, déjà figés,
+│                                        #   les citent encore). Deux nouveaux notebooks actifs, cf. entrées dédiées :
+│                                        #   `AAV5_sel_sorting.ipynb` (nouveau filtre "sel", pendant du filtre "viab" de
+│                                        #   `AAV5_SEL_sorting.ipynb`) et `AAV5_SEL_profile_model_sel_sorting.ipynb`
+│                                        #   (comparaison ShallowProfileMLP brut vs les 3 variantes de ce filtre).
+│                                        # AAV5/AAV5_SEL_deep_profile_model_sel_org2.ipynb (2026-09-11, exécuté et
+│                                        #   supprimé du dossier actif le 2026-09-14 — copie non exécutée conservée dans
+│                                        #   `obsolete/`) : compare `ShallowProfileMLP` (~27k params, archi standard) et
+│                                        #   `DeepProfileMLP` (reprise verbatim de `Modelization_V1/notebooks/
+│                                        #   viability_parameter_sweeps/diversity_sweep_deeper_mlp.ipynb`, ~90k params,
+│                                        #   embedding par position + tête pairwise + tête dense 4 couches) sur `sel_org2`,
+│                                        #   brut vs `AAV5_organoides_sorted.csv` (filtre `viab`), pleine donnée (pas de
+│                                        #   cap `N_FIT`/`N_EVAL`, split 50/50). RÉSULTAT (retenu pour mémoire, le fichier
+│                                        #   lui-même est supprimé) : Deep systématiquement LÉGÈREMENT PIRE que Shallow —
+│                                        #   held-out r brut 0.412 (deep) vs 0.423 (shallow), trié 0.429 vs 0.441 (Δr
+│                                        #   ≈ -0.011/-0.012 partout, aussi sur les top-k%) — la capacité supplémentaire
+│                                        #   n'aide pas sur cette cible/ce volume de données, d'où l'abandon de la
+│                                        #   variante deep pour la suite (tous les notebooks `sel_org2` suivants
+│                                        #   n'utilisent que `ShallowProfileMLP`).
+│                                        # AAV5/AAV5_sel_sorting.ipynb (2026-09-14) : pendant du filtre `viab`
+│                                        #   (`AAV5_SEL_sorting.ipynb` §5, borne `compte_plasmide`) pour la sélectivité —
+│                                        #   nommage adopté cette session : filtre existant = **viab**, celui-ci = **sel**.
+│                                        #   Section 1-3 : au lieu de `compte_plasmide`, borne `compte_virus` (dénominateur
+│                                        #   du ratio `sel_org_i = organoïde_i/virus`, même rôle structurel que
+│                                        #   `compte_plasmide` pour `viab`) + retrait 7m8 (hamming≤2, identique à `viab`).
+│                                        #   Balayage seuil bas (1 à 500) et seuil haut (500 à 50 000, la traîne de
+│                                        #   `compte_virus` monte à ~3e6, même profil de contamination que le plasmide)
+│                                        #   pour choisir `VIRUS_MIN=5`/`VIRUS_MAX=5000` (à tâtons, informé par les
+│                                        #   percentiles/tables affichées, PAS un seuil "propre" trouvé analytiquement).
+│                                        #   Écrit `AAV5_organoides_sorted_sel.csv` (3 092 351 lignes, sel_org2 fini
+│                                        #   392 186). Section 4 : empile en plus un seuil sur `compte_organoide_2_adn`
+│                                        #   (numérateur, focus `sel_org2` — la cible qui donne systématiquement le
+│                                        #   meilleur signal cette session), balayage puis `ORG2_MIN=2` → écrit
+│                                        #   `AAV5_organoides_sorted_sel_org2.csv` (365 290 lignes). Section 5 (ajoutée
+│                                        #   après un aller-retour sur la pondération inverse-variance, cf. ci-dessous) :
+│                                        #   **filtre par intersection de réplicats** au lieu d'un seuil de magnitude —
+│                                        #   `compte_organoide_2_adn > 0` ET `compte_organoide_3_adn > 0` (org1 exclu,
+│                                        #   déjà identifié comme outlier dans `AAV5_SEL_potts_readout_depth.ipynb`), moins
+│                                        #   le 7m8. Motivation utilisateur : un seuil de comptage ne tranche pas "signal
+│                                        #   faible réel" vs "sous-échantillonné" — exiger une lecture indépendante sur les
+│                                        #   DEUX réplicats est un critère de fiabilité plus direct. Écrit
+│                                        #   `AAV5_organoides_sorted_sel_org2org3.csv` (146 589 lignes, 2.6% du brut — org2
+│                                        #   seul=486 844, org3 seul=233 974, intersection=146 633 avant retrait 7m8).
+│                                        # AAV5/AAV5_SEL_profile_model_sel_org2_invvar.ipynb (2026-09-14, créé, exécuté,
+│                                        #   PUIS SUPPRIMÉ par l'utilisateur — résultat négatif gardé en mémoire ici pour
+│                                        #   ne pas retenter la même approche naïve) : au lieu de FILTRER par seuil dur,
+│                                        #   pondère chaque ligne dans la loss MSE du `ShallowProfileMLP` par sa précision
+│                                        #   estimée `w = 1/(1/(n_num+0.5)+1/(n_den+0.5))` (même formule que la
+│                                        #   pondération inverse-variance déjà utilisée pour la régression de Potts,
+│                                        #   `eps=0.5` — cf. "Consigne permanente"), `n_num=compte_organoide_2_adn`,
+│                                        #   `n_den=compte_virus`, normalisée par sa moyenne sur le fit set. RÉSULTAT :
+│                                        #   dégrade `r` held-out PARTOUT (brut 0.429→0.413, `sel_org2` filtré dur
+│                                        #   0.453→0.446, top-k% aussi en baisse) — diagnostic : la distribution du poids
+│                                        #   brut est extrêmement lourde-queue (percentiles [p0=0.5, p50=7.6, p90=54,
+│                                        #   p99=617, max=250 634] sur le brut) donc la moyenne de normalisation (41.2) et
+│                                        #   la loss sont dominées par une poignée de lignes à comptage énorme
+│                                        #   (contamination probable), au détriment de la masse de données normales —
+│                                        #   PAS une réfutation du principe (un plafonnement/winsorisation du poids au
+│                                        #   p99 aurait pu corriger ça), juste de l'implémentation non bornée testée ici.
+│                                        #   Abandonné au profit du filtre par intersection de réplicats (§5 ci-dessus,
+│                                        #   nettement supérieur) plutôt que d'être corrigé.
+│                                        # AAV5/AAV5_SEL_profile_model_sel_sorting.ipynb (2026-09-14) : `ShallowProfileMLP`
+│                                        #   SEUL (pas de variante deep, cf. `AAV5_SEL_deep_profile_model_sel_org2.ipynb`
+│                                        #   ci-dessus) entraîné sur `sel_org2`, pleine donnée (pas de cap `N_FIT`/
+│                                        #   `N_EVAL`, split 50/50 seed=0 partagé), **4 CSV** : brut, `sel` (virus seul),
+│                                        #   `sel_org2` (virus+org2), `sel_org2∩org3` (intersection de réplicats, §5 d'
+│                                        #   `AAV5_sel_sorting.ipynb`). RÉSULTATS held-out r (n_fit) : brut +0.429
+│                                        #   (206 909), sel virus +0.430 (166 680), sel_org2 +0.453 (155 249),
+│                                        #   **sel_org2∩org3 +0.596 (62 300)** — MEILLEUR RÉSULTAT DE LA SESSION sur
+│                                        #   `sel_org2` toutes méthodes confondues (loin devant le Potts non filtré
+│                                        #   +0.399 et le ProfileMLP sur `viab`-trié +0.438), avec un saut net sur tous
+│                                        #   les top-k% (top-10% 0.304→0.404, top-20% 0.406→0.500) malgré seulement 62 300
+│                                        #   lignes de fit (30% du volume `sel_org2` filtré dur, 4x moins que le brut) —
+│                                        #   confirme que le critère "détecté sur 2 réplicats indépendants" filtre le
+│                                        #   bruit bien mieux qu'un seuil de magnitude sur un seul comptage, cohérent avec
+│                                        #   le fait que l'archi (~27k params) n'est de toute façon pas data-starved à ces
+│                                        #   volumes (cf. diagnostics similaires ailleurs dans ce fichier).
+│                                        # AAV5/AAV5_SEL_fitting_protocol_org2org3.ipynb (2026-09-14) : fait tourner la
+│                                        #   classe mécaniste `ProtocolV3` (pas un fit — poids Potts déjà extraits
+│                                        #   réutilisés tels quels : viab = `aav5_{F,J}_viab_potts_sorted_unreg.npy`, sél =
+│                                        #   `aav5_{F,J}_sel_pool_potts_sorted_readoutT20_unreg.npy`) sur 50 000 variants
+│                                        #   sous-échantillonnés de `AAV5_organoides_sorted_sel_org2org3.csv` (§5 d'
+│                                        #   `AAV5_sel_sorting.ipynb`), avec la librairie initiale `lambda0` **construite
+│                                        #   à partir de `avg(compte_organoide_2_adn, compte_organoide_3_adn)`** au lieu du
+│                                        #   `compte_plasmide` réel — choix délibéré de l'utilisateur, pas une
+│                                        #   approximation. Paramètres protocole **classiques, sans sweep** (repris de
+│                                        #   `AAV5_SEL_fitting_protocol.ipynb`) : `rho=1e-3`, `mu=50`, `T_viab=T_sel=
+│                                        #   1/ln(2)`, `noise_viab=noise_sel=0.5`, `D=1e8`, `dilution_factor=1e5`. **Deux
+│                                        #   bugs/corrections numériques rencontrés** (documentés dans le notebook, pas
+│                                        #   juste patchés silencieusement) : (1) un variant concentrant 13% de la masse
+│                                        #   totale de `avg(org2,org3)` faisait exploser la mémoire de `produce_capsids()`
+│                                        #   (matrice `(d0,max_cells)`, OOM ~125 Gio testé et confirmé) → winsorisation
+│                                        #   p99 (500/50 000 lignes cappées, independante du facteur d'echelle choisi
+│                                        #   ensuite) ; (2) **calibration de `lambda0`** (raffinée deux fois) — laisser
+│                                        #   `lambda0` à l'échelle brute des comptages NGS (~1e7 au total) fait s'effondrer
+│                                        #   `lambda0p` simulé sur 92 variants/50 000 (`dilution_factor=1e5` est calibré
+│                                        #   pour des bibliothèques ~1e11-1e12 molécules) ; un premier fix (rescale des
+│                                        #   proportions à `N0=150*N1`) marchait déjà bien (98%→95.7% détectés) mais
+│                                        #   choisissait une masse totale arbitraire. Version finale (demandée par
+│                                        #   l'utilisateur) : `lambda0(s) = plasmid_count(s) * dilution_factor`, pour que
+│                                        #   `sample_sequences()` (Binomial(lambda0, p=1/dilution_factor)) retombe **en
+│                                        #   espérance exactement sur `avg(org2,org3)`** après dilution — vérifié
+│                                        #   numériquement dans le notebook (médiane `lambda0/dilution_factor` = médiane
+│                                        #   `plasmid_count` = 57.0) ; `lambda0p` détecte 98.2% des variants (49 119/50 000).
+│                                        #   RÉSULTATS FINAUX (n=50 000, sauf viab n=47 693 lignes finies) : viab — plafond
+│                                        #   GT r=+0.255, simulé r=+0.266 (quasi identique : le bruit de protocole n'ajoute
+│                                        #   presque rien par-dessus la faiblesse déjà connue des poids viab) ; sél org2 —
+│                                        #   plafond GT r=+0.555, simulé r=+0.240 (perd environ la moitié du signal) ;
+│                                        #   sél org3 — plafond GT r=+0.481, simulé r=+0.207 (ces deux derniers chiffres
+│                                        #   INCHANGÉS par la recalibration de `lambda0` — attendu, `lambda2`/`lambda3` ne
+│                                        #   dépendent que des PROPORTIONS de `lambda0`, pas de son échelle absolue).
+│                                        #   **Accord réplicat-réplicat simulé (rep0 vs rep1/rep2, +0.22/+0.22) très en
+│                                        #   dessous du réel org2-vs-org3 sur ce même sous-ensemble (+0.694)** — à ce
+│                                        #   point de fonctionnement non calibré pour AAV5, le protocole simulé est
+│                                        #   nettement plus bruité que la vraie expérience. Recovery top-1% en `viab`
+│                                        #   quasi au niveau du hasard (sim 0.011 vs hasard 0.01, GT 0.032) — le bruit de
+│                                        #   comptage à `D=1e8`/2000 reads-variant
+│                                        #   écrase le classement aux percentiles extrêmes. Piste ouverte, non faite ici :
+│                                        #   une recherche mu/T/noise/D façon partie 2 d'`AAV9_fitting_protocol.ipynb`,
+│                                        #   spécifiquement contre ce sous-ensemble org2∩org3, reste à faire pour
+│                                        #   calibrer AAV5 (déjà noté comme piste ouverte dans l'entrée `AAV5_SEL_
+│                                        #   fitting_protocol.ipynb` ci-dessus, toujours pas fait).
+│                                        # AAV5/AAV5_viab_sorting.ipynb (2026-09-14) : reprend le filtre `viab` depuis
+│                                        #   zéro, suite à un diagnostic sur `AAV5_SEL_fitting_protocol_org2org3.ipynb`
+│                                        #   (§5) — le pic simulé au plancher pseudocount sur `sim_viab` N'EST PAS un
+│                                        #   artefact (correction utilisateur) : il reproduit une vraie population
+│                                        #   non-fit (variants qui disparaissent réellement à l'étape virus), cohérent
+│                                        #   avec la bimodalité déjà documentée de `fit4functionaav9.csv`
+│                                        #   (`log_enrichment_histograms.ipynb`). Le vrai problème : le `y_viab` réel
+│                                        #   comparé dans ce notebook vient du CSV `_sel_org2org3.csv`, conditionné sur
+│                                        #   détection organoïde (org2>0 ET org3>0) — un signal organoïde suppose que le
+│                                        #   virus a été produit, donc `compte_virus` y est strictement >0 partout
+│                                        #   (vérifié : 0/50 000 lignes à zéro) : cette population réelle exclut
+│                                        #   structurellement le mode non-fit, ce n'est pas une preuve que le simulé se
+│                                        #   trompe. Ce notebook reprend donc le filtre `viab` sur la population
+│                                        #   COMPLÈTE (pas conditionnée organoïde), en repartant de zéro plutôt qu'en
+│                                        #   retouchant l'ancien filtre `[10, 500]` sur `compte_plasmide`
+│                                        #   (`obsolete/AAV5_SEL_sorting.ipynb` §5, jamais comparé à une version moins
+│                                        #   agressive). Étapes : retrait 7m8 seul (274/5 595 543, inchangé, comme
+│                                        #   partout ailleurs) puis retrait des SEULS comptages nuls — `compte_plasmide
+│                                        #   == 0` : 550 498 lignes (9.84%), EXACTEMENT la fraction déjà non-finie de
+│                                        #   `log2_enrichissement_virus_sur_plasmide` fourni (ce filtre n'ajoute donc
+│                                        #   rien par rapport à un simple `isfinite()`) ; `compte_virus == 0` : 0 ligne
+│                                        #   dans tout le dataset brut (5 595 543 lignes) — jamais nul dans ce CSV
+│                                        #   (min=0.5, cf. aussi le check sur `AAV5_organoides_sorted.csv`). Résultat :
+│                                        #   5 044 820 variants conservés (90.2% du brut) contre 3 822 400 (68.3%) pour
+│                                        #   l'ancien filtre `[10,500]`. MAIS la distribution obtenue est PLUS FRAGMENTÉE
+│                                        #   (6 pics `find_peaks`, prominence≥5% : -2.73/-2.13/-1.73/-1.13/+0.27/+1.27)
+│                                        #   que celle de l'ancien filtre (4 pics mieux séparés en 2 clusters nets :
+│                                        #   -3.25/-2.90/-2.21/+0.89). §6-11 (ajoutées dans le même tour, suite à la
+│                                        #   suggestion utilisateur "les pics sont dus à des counts trop bas, des
+│                                        #   idées ?") : DITHERING — `compte_plasmide`/`compte_virus` sont des multiples
+│                                        #   exacts de 0.5 (100% des lignes), et `compte_plasmide < 5` n'a que 10
+│                                        #   valeurs possibles dans tout le CSV, d'où les pics (des centaines de
+│                                        #   milliers de variants sans rapport partagent le même couple de comptages,
+│                                        #   donc le même ratio). Bruit `Uniform(-0.25,+0.25)` ajouté aux comptages
+│                                        #   avant recalcul du ratio (`eps=0.5`, visualisation seule — ne remplace rien
+│                                        #   en aval, la pondération inverse-variance déjà en place gère l'incertitude
+│                                        #   des petits comptages pour la régression) : sur `df_nz` (comptages nuls
+│                                        #   seuls retirés), le dithering fait ENTIÈREMENT disparaître la bimodalité —
+│                                        #   une seule bosse unimodale (§8, histogramme détaillé imprimé). Sur l'ancien
+│                                        #   filtre `[10,500]`, la bimodalité SURVIT au dithering (§9 : 2 pics nets
+│                                        #   -3.72/-0.23, vallée franche à -2.45) — pas un artefact là. Sweep §10 de
+│                                        #   `PLASMID_MIN` (0/2/5/8/10/15/20/30, dithering à chaque seuil, métrique
+│                                        #   "vallée/pics" = profondeur de vallée entre les 2 modes, 1=unimodal,
+│                                        #   →0=séparé) : unimodal jusqu'à 5 inclus, bimodalité apparaît à 8 (0.699),
+│                                        #   se renforce à 10 (0.630, valeur historique), puis rendements décroissants
+│                                        #   (15→0.533/20→0.495/30→0.447 pour une perte de diversité sévère
+│                                        #   3.82M→1.21M). **§11 conclusion : `PLASMID_MIN=10` n'était pas arbitraire —
+│                                        #   il tombe quasiment exactement sur le seuil où la bimodalité réelle devient
+│                                        #   robuste ; en dessous, la population est dominée par du bruit de comptage
+│                                        #   qui noie tout signal fit/non-fit, même après correction de la
+│                                        #   discrétisation. Recommandation : garder `AAV5_organoides_sorted.csv` comme
+│                                        #   CSV `viab` de référence, ne PAS le remplacer.** Écrit
+│                                        #   `AAV5_organoides_sorted_viab.csv` (5 044 820 lignes, §5) à titre
+│                                        #   EXPLORATOIRE uniquement — ne remplace PAS `AAV5_organoides_sorted.csv`,
+│                                        #   toujours utilisé tel quel par `AAV5_SEL_potts_readout_depth.ipynb` et par
+│                                        #   les CSV `_sel*` dérivés dans `AAV5_sel_sorting.ipynb`. Exécuté (nbconvert).
+│                                        # AAV5/AAV5_viab_fitting_protocol.ipynb (2026-09-14) : `ProtocolV3` sur la
+│                                        #   phase de VIABILITÉ seule (`F_sel=J_sel=0`, `selectivity()` tourne quand
+│                                        #   même via `loop_DE()` mais son résultat est ignoré), sur 50 000 variants
+│                                        #   sous-échantillonnés d'`AAV5_organoides_sorted.csv` (le CSV `viab` validé
+│                                        #   dans `AAV5_viab_sorting.ipynb`, PAS un pool synthétique). Différence clé
+│                                        #   avec les notebooks `AAV5_SEL_fitting_protocol*.ipynb` précédents :
+│                                        #   `lambda0` calibré sur le VRAI `compte_plasmide` de chaque variant (pas un
+│                                        #   proxy comme `avg(org2,org3)`) — possible ici uniquement parce que le CSV
+│                                        #   `viab` a `compte_plasmide` directement, donc aucune winsorisation requise
+│                                        #   (déjà borné `[10,500]` par construction du CSV). **`D=1e6` (demande
+│                                        #   explicite utilisateur)**, calibré pour matcher le ratio reads/variant réel
+│                                        #   global : total réel ~1.16e8 (plasmide)/~1.76e8 (virus) reads pour
+│                                        #   5 595 543 variants (~21-31 reads/variant sur le brut, ~27-39 sur le CSV
+│                                        #   trié) → `D/d0=20` à l'échelle réduite de ce notebook (50 000 variants),
+│                                        #   même ordre de grandeur — au lieu du `D=1e8` (`D/d0=2000`, ~100x trop dense)
+│                                        #   repris d'AAV9 dans les notebooks précédents. Reste des paramètres
+│                                        #   "classiques" inchangés : `rho=1e-3`, `mu=50`, `T_viab=1/ln(2)`,
+│                                        #   `noise_viab=0.5`, `dilution_factor=1e5`. Sanity check : `r(score GT viab,
+│                                        #   réel)=+0.201`, cohérent avec les chiffres déjà connus (+0.196 à +0.266
+│                                        #   selon le sous-ensemble, notebooks précédents). **RÉSULTAT INATTENDU :**
+│                                        #   `r(sim_viab, réel)` CHUTE à `+0.099` (brut) / `+0.092` (après dithering,
+│                                        #   même technique qu'`AAV5_viab_sorting.ipynb` — quantum réel=0.5→jitter
+│                                        #   ±0.25, quantum simulé=1 (comptages `Multinomial` entiers)→jitter ±0.5) —
+│                                        #   BIEN PLUS BAS que les +0.196/+0.266 obtenus à `D=1e8` dans les notebooks
+│                                        #   précédents. Le dithering confirme que ce n'est PAS un artefact de
+│                                        #   visualisation : la distribution réelle ditherée reste clairement bimodale
+│                                        #   (2 pics nets, -2.28/+0.70, cohérent avec `AAV5_viab_sorting.ipynb`), mais
+│                                        #   la distribution SIMULÉE ditherée devient UNIMODALE (1 seul pic, +0.18) —
+│                                        #   le bruit de mesure simulé à cette profondeur (comptage NGS `Multinomial`
+│                                        #   ET bruit de production `noise_viab=0.5`) noie entièrement le signal
+│                                        #   déterministe F+J, alors que le vrai signal biologique reste visible dans
+│                                        #   les vraies données à ce même ordre de grandeur de comptage. Accord
+│                                        #   réplicat-réplicat simulé (rep0/1/2) seulement +0.35 — bruit de protocole
+│                                        #   élevé à ce `D`. 86.7% des variants ont `lambda2p>0` (virus détecté).
+│                                        #   Interprétation ouverte (pas tranchée ici) : `D=1e6` matche le ratio
+│                                        #   reads/variant MOYEN du dataset BRUT, mais le sous-échantillon utilisé ici
+│                                        #   vient du CSV `viab` déjà filtré/enrichi (`compte_plasmide` médian=22.5,
+│                                        #   dans la zone "informative" identifiée par le sweep d'`AAV5_viab_sorting.
+│                                        #   ipynb`) — matcher la moyenne globale du brut n'implique pas forcément que
+│                                        #   le bruit de mesure simulé (Multinomial + `noise_viab`) soit calibré au bon
+│                                        #   niveau pour reproduire la précision de CE sous-ensemble précis ; `rho`/
+│                                        #   `mu`/`T_viab`/`noise_viab`/`dilution_factor` restent tous non recalibrés
+│                                        #   pour AAV5 spécifiquement (repris tels quels de la config "classique"
+│                                        #   établie sur d'autres runs).
+│                                        #   **MISE À JOUR (même jour) : poids F_viab/J_viab refit directement sur CES
+│                                        #   50 000 variants** (au lieu de réutiliser les poids globaux fit sur les
+│                                        #   3 822 400 lignes complètes), pour trancher si le faible `r(sim,réel)`
+│                                        #   venait d'un décalage poids/échantillon ou du bruit de protocole lui-même —
+│                                        #   même recette partout ailleurs (`RegressionV1.fit_weights_potts_from_data`,
+│                                        #   poids inverse-variance `eps=0.5`, `lam=0`). Un split interne 25k/25k donne
+│                                        #   un r held-out de seulement `+0.152` (rank=4842/8541, design rank-déficient
+│                                        #   à cette échelle réduite) — PIRE que le fit global réutilisé jusque-là
+│                                        #   (`+0.201` sur ce même sous-échantillon) : un Potts fit à seulement 50k
+│                                        #   lignes généralise moins bien que le fit sur 3.8M lignes. Les poids finaux
+│                                        #   utilisés dans la suite du notebook sont néanmoins refit sur les 50 000 en
+│                                        #   entier (rank=4853/8541) — `r(score GT, réel)` EN ÉCHANTILLON monte à
+│                                        #   `+0.333` (partiellement de la sur-adaptation au bruit propre de `y_viab`,
+│                                        #   pas seulement du signal biologique — cf. le r held-out plus bas ci-dessus).
+│                                        #   r(score local, score global)=+0.411 sur ces 50 000 séquences — paysages
+│                                        #   réellement différents, pas juste un bruit de fit négligeable. Avec ce GT
+│                                        #   local (le plus favorable possible), `r(sim_viab, réel)` remonte à `+0.179`
+│                                        #   (`+0.171` après dithering) — mieux que `+0.099`/`+0.092` avec les poids
+│                                        #   globaux, mais **le résultat central ne change pas** : la distribution
+│                                        #   simulée ditherée reste UNIMODALE (1 pic, +0.30) alors que la réelle
+│                                        #   ditherée reste bimodale (2 pics, -2.28/+0.70, inchangé — ne dépend pas des
+│                                        #   poids). Accord réplicat-réplicat simulé quasi identique (+0.36-0.37).
+│                                        #   **Conclusion renforcée : le bruit de mesure simulé à `D=1e6` (pas un
+│                                        #   décalage de poids GT) est la cause principale de la perte de bimodalité —
+│                                        #   même avec le meilleur GT possible pour cet échantillon précis, le
+│                                        #   protocole simulé ne reproduit pas la structure fit/non-fit réelle à cette
+│                                        #   profondeur.** Piste ouverte (toujours pas faite) : recalibrer `noise_viab`/
+│                                        #   `T_viab`/`rho`/`mu` spécifiquement pour AAV5 à ce régime de profondeur.
+│                                        # AAV2/AAV2_viab_sorting.ipynb (2026-09-14) : premier notebook AAV2 de
+│                                        #   Modelization_V2 — même méthode que la session AAV5 (analyse détaillée,
+│                                        #   dithering, sweep informé par les données, régression de Potts), demandée
+│                                        #   explicitement par l'utilisateur ("refais pareil"). AAV2_organoides.csv
+│                                        #   (4 273 463 lignes) s'avère structurellement DIFFÉRENT d'AAV5 sur plusieurs
+│                                        #   points : (1) comptages ENTIERS (quantum=1, pas des multiples de 0.5) —
+│                                        #   dithering ajusté en conséquence (±0.5 au lieu de ±0.25) ; (2) `compte_plasmide`
+│                                        #   plafonne à 61 seulement (médiane=1, p90=6) contre 500+ pour AAV5 — 34.2% de
+│                                        #   lignes à `compte_plasmide==0` (viab non-fini pour 34.2%, cohérent) ; (3)
+│                                        #   AUCUN spike-in identifiable comme le 7m8 d'AAV5 côté plasmide (le top-15 par
+│                                        #   abondance décroît sans rupture nette, max=61) ; (4) en revanche, contamination
+│                                        #   sévère côté VIRUS — `compte_virus` monte jusqu'à 1 081 060 alors que le
+│                                        #   plasmide correspondant est ≤9, donnant des `log2 enrichissement` jusqu'à
+│                                        #   +19.24 (AAV5/AAV9 ne dépassaient jamais ~+11) ; signature d'un artefact
+│                                        #   technique diffus (index-hopping/contamination croisée probable, pas un
+│                                        #   spike-in ponctuel — la queue de ratios implausibles est un continuum lisse,
+│                                        #   sans rupture nette, donc pas de coupure hamming possible comme pour le 7m8).
+│                                        #   Dithering direct sur le brut (population `compte_plasmide>0`) : **UNIMODALE**
+│                                        #   dès le départ (1 seul pic, -0.07) — contrairement à AAV5/AAV9. Sweep
+│                                        #   `PLASMID_MIN` (0 à 20, dithering à chaque seuil, même métrique
+│                                        #   vallée/pics qu'`AAV5_viab_sorting.ipynb`) : reste unimodal jusqu'à la limite
+│                                        #   pratique de diversité (n=7258 à `plasmide>20`, déjà proche du plafond de 61) —
+│                                        #   **aucune bimodalité fit/non-fit détectée pour AAV2, à aucun seuil testable**,
+│                                        #   constat honnête plutôt qu'un échec de méthode (le plafond de comptage
+│                                        #   plasmide, 10x plus bas que celui d'AAV5, ne permet simplement pas d'atteindre
+│                                        #   le régime où AAV5 révélait sa bimodalité). Filtre `viab` retenu (à
+│                                        #   tâtons, comme les filtres AAV5 équivalents) : `PLASMID_MIN=1` (exclut
+│                                        #   seulement `compte_plasmide==0`, déjà non-fini de toute façon) + `RATIO_MAX=100`
+│                                        #   sur `virus/plasmide` (juste au-dessus du p99=66.9 mesuré sur les lignes à
+│                                        #   `plasmide>=10` — cap contamination, PAS motivé par une bimodalité comme pour
+│                                        #   AAV5) → 2 746 425 lignes conservées (64.3%). Écrit `AAV2_organoides_sorted.csv`.
+│                                        #   Régression de Potts (`RegressionV1.fit_weights_potts_from_data`, poids
+│                                        #   inverse-variance `eps=0.5`, split train/test 50/50, `N_FIT=90 000`/
+│                                        #   `N_EVAL=120 000` — même recette qu'`AAV5_SEL_analysis.ipynb`) : CV donne un
+│                                        #   lambda intérieur à la grille (1e3, PAS au bord — contrairement à AAV5 où la
+│                                        #   CV dégénérait vers des lambda énormes), rank=7715/8541. **Held-out
+│                                        #   r=+0.266 (CV) vs +0.221 (lam=0 non-régularisé)** — CV retenue, **meilleur
+│                                        #   résultat que la viabilité AAV5** (r~0.2) malgré un dataset a priori plus
+│                                        #   bruité (comptages entiers, 34% de zéros, contamination virale diffuse).
+│                                        #   Exporte `lib/aav2_F_viab_potts_sorted_cv.npy`/`aav2_J_viab_potts_sorted_cv.npy`
+│                                        #   (poids du fit sur les 90 000 lignes, PAS un refit sur fit+eval réunis — deux
+│                                        #   tentatives de refit sur 210 000 lignes ont fait planter le kernel par manque
+│                                        #   de mémoire, le design Potts dense (N,8541) devenant trop volumineux ; corrigé
+│                                        #   en exportant directement les poids déjà validés held-out, même convention
+│                                        #   qu'`AAV5_SEL_analysis.ipynb` qui n'a jamais fait ce refit non plus). Exécuté
+│                                        #   (nbconvert, CPU, ~5 min dont ~4 min de CV). Piste ouverte, non faite ici :
+│                                        #   notebook de sélectivité AAV2 (organoïde/noyaux).
+│                                        # AAV2/AAV2_viab_fitting_protocol.ipynb (2026-09-14) : pendant AAV2
+│                                        #   d'`AAV5_viab_fitting_protocol.ipynb` — `ProtocolV3` (viab seule,
+│                                        #   `F_sel=J_sel=0`) sur 50 000 variants sous-échantillonnés
+│                                        #   d'`AAV2_organoides_sorted.csv`, poids `aav2_F_viab_potts_sorted_cv.npy`/
+│                                        #   `aav2_J_viab_potts_sorted_cv.npy`, `lambda0` calibré sur le vrai
+│                                        #   `compte_plasmide`, `D=5e5` (`D/d0=10`, encadré par 3.53 plasmide/11.10
+│                                        #   virus reads/variant réels sur ce CSV). Inclut un dithering (section 5b,
+│                                        #   quantum=1 des deux côtés) pour vérifier que ni le réel ni le simulé ne
+│                                        #   sont bimodaux — **écrit avant le feedback utilisateur sur le dithering
+│                                        #   ci-dessous ; conservé tel quel, pas retiré rétroactivement, mais plus
+│                                        #   aucun nouveau notebook n'en ajoute**. Écrit mais **jamais exécuté** —
+│                                        #   l'utilisateur a explicitement demandé à lancer lui-même l'exécution
+│                                        #   ("non laisse moi lancer").
+│                                        # AAV2/AAV2_viab_profile_model.ipynb (2026-09-14) : `ShallowProfileMLP`
+│                                        #   (archi standard du projet, reprise verbatim des notebooks
+│                                        #   `AAV5_SEL_profile_model_*.ipynb`) entraîné sur `viab`, brut
+│                                        #   (`AAV2_organoides.csv`) vs trié (`AAV2_organoides_sorted.csv`),
+│                                        #   `N_CAP=300 000` lignes finies max par CSV (150k fit/150k eval) pour un
+│                                        #   temps d'entraînement raisonnable. Écrit mais **jamais exécuté** (même
+│                                        #   raison que ci-dessus).
+│                                        # AAV2/AAV2_viab_top10k_potts_protocol_mlp.ipynb (2026-09-14) : nouvelle
+│                                        #   population de travail demandée explicitement — les **10 000 variants au
+│                                        #   plus fort `compte_plasmide`** (représentation la plus fiable de la
+│                                        #   librairie initiale), PAS un sous-échantillon aléatoire ni un seuil bas.
+│                                        #   Motivation : à ce niveau de comptage (plasmide dans [19,61]), l'effet de
+│                                        #   discrétisation qui motivait le dithering ailleurs devient négligeable —
+│                                        #   **aucun dithering utilisé ici**, suite au feedback utilisateur ("le
+│                                        #   dithering ajoute juste du bruit, je suis pas fan" — cf. mémoire
+│                                        #   `feedback_no_dithering`, plus aucun futur notebook n'en utilisera). Même
+│                                        #   cap `RATIO_MAX=100` que le filtre `viab` général (57/10 000 lignes
+│                                        #   retirées, contamination résiduelle même à ce niveau de comptage) →
+│                                        #   9 943 variants retenus, reads/variant réels 23.5 (plasmide)/28.2 (virus)
+│                                        #   — bien plus équilibrés que sur la population complète, confirmant que la
+│                                        #   contamination expliquait l'essentiel de l'asymétrie observée ailleurs.
+│                                        #   Pipeline en 3 étapes SUR LA MÊME POPULATION (split 80/20, pas 50/50, vu
+│                                        #   que ~9 900 lignes pour 8541 features Potts laisse peu de marge) : (1)
+│                                        #   régression de Potts (CV vs lam=0, export
+│                                        #   `aav2_{F,J}_viab_potts_top10k_{cv|unreg}.npy`) ; (2) `ProtocolV3` avec
+│                                        #   ces poids, `D=2.5e5` (`D/d0≈25`, calibré sur CETTE population) ; (3)
+│                                        #   `ShallowProfileMLP` (même archi que les autres notebooks profile_model) ;
+│                                        #   table de comparaison finale des 3 r held-out. Écrit mais **jamais
+│                                        #   exécuté** (même raison — l'utilisateur lance lui-même les notebooks
+│                                        #   coûteux depuis cette session, cf. mémoire `feedback_user_runs_notebooks`).
 │   ├── lib/                             # copies de sequence_classesV1.py/analysisV1.py/RegressionV1.py/
 │                                        #   initialize_weights.py/cross_packaging_draft.py (aucune ne contient de
 │                                        #   mutant-scan) + aav9_{F,J}_viab_potts.npy (la nouvelle GT) +
@@ -857,6 +1210,123 @@ jamais un « score » (ne pas écrire "predicted score", "F_score", "J_score", "
 
 ## État actuel
 
+- **2026-09-14 (suite) : plus de dithering à l'avenir (feedback utilisateur) ; 3 nouveaux notebooks
+  AAV2 écrits (fitting_protocol, profile_model, top10k Potts+Protocol+MLP) mais AUCUN exécuté —
+  l'utilisateur lance lui-même les notebooks coûteux depuis cette session.** Deux préférences
+  actées en mémoire : (1) `feedback_no_dithering` — le dithering (jitter sur les comptages avant de
+  recalculer un ratio) "ajoute juste du bruit", ne plus l'utiliser (les notebooks déjà écrits avec
+  le gardent, pas de retrait rétroactif) ; (2) `feedback_user_runs_notebooks` — préparer les
+  notebooks lourds (entraînement/CV/simulation) sans les exécuter automatiquement via nbconvert,
+  laisser l'utilisateur déclencher l'exécution. Nouvelle population de travail introduite dans
+  `AAV2_viab_top10k_potts_protocol_mlp.ipynb` : les 10 000 variants au plus fort `compte_plasmide`
+  (représentation la plus fiable de la librairie initiale, plasmide dans [19,61]) plutôt qu'un
+  sous-échantillon aléatoire — choisie justement pour rendre la discrétisation négligeable sans
+  dithering. Détail complet dans les 3 entrées dédiées d'`AAV2/` dans "Structure du projet"
+  ci-dessus.
+- **2026-09-14 (suite) : premier notebook AAV2 (`AAV2_viab_sorting.ipynb`) — pas de bimodalité
+  fit/non-fit comme AAV5/AAV9, mais un meilleur r held-out de régression Potts (+0.266).** Même
+  méthode que la session AAV5 (dithering, sweep informé par les données, régression de Potts),
+  appliquée à `AAV2_organoides.csv` (4 273 463 lignes) sur demande explicite ("refais pareil").
+  Dataset structurellement différent : comptages ENTIERS (pas des multiples de 0.5), `compte_plasmide`
+  plafonne à 61 (médiane=1) contre 500+ pour AAV5, aucun spike-in identifiable comme le 7m8 mais une
+  contamination virale diffuse (jusqu'à 1 081 060 reads virus pour ≤9 reads plasmide, log2
+  enrichissement jusqu'à +19.24 — un artefact technique probable, type index-hopping, en continuum
+  lisse donc géré par un cap de ratio plutôt qu'une coupure hamming). Dithering + sweep de
+  `PLASMID_MIN` (0 à 20) : **aucune bimodalité ne ressort à aucun seuil testable** — constat honnête
+  (le plafond de comptage 10x plus bas qu'AAV5 ne permet pas d'atteindre le régime informatif).
+  Filtre retenu : `PLASMID_MIN=1` + `RATIO_MAX=100` → 2 746 425 lignes (64.3%),
+  `AAV2_organoides_sorted.csv`. Régression de Potts (même recette qu'`AAV5_SEL_analysis.ipynb`,
+  poids inverse-variance eps=0.5) : **held-out r=+0.266 (CV, lambda=1e3 intérieur à la grille) —
+  meilleur que la viabilité AAV5 (~0.2)**, malgré un dataset a priori plus bruité. Exporté
+  `lib/aav2_{F,J}_viab_potts_sorted_cv.npy`. Deux plantages mémoire rencontrés et corrigés en route
+  (refit sur un design Potts dense trop grand, 210k×8541 lignes) — poids finaux = ceux du fit sur
+  90 000 lignes déjà validé held-out, pas de refit sur plus de données (même convention qu'AAV5).
+  Détail complet dans l'entrée `AAV2/AAV2_viab_sorting.ipynb` de "Structure du projet" ci-dessus.
+- **2026-09-14 (suite) : à `D` calibré sur le ratio reads/variant réel (D=1e6, D/d0=20), le protocole
+  simulé sur la phase viabilité perd la bimodalité réelle — résultat inattendu, piste ouverte.**
+  Nouveau notebook `AAV5_viab_fitting_protocol.ipynb` : `ProtocolV3` (viab seule, `F_sel=J_sel=0`) sur
+  50 000 variants d'`AAV5_organoides_sorted.csv` (le CSV validé juste avant), `lambda0` calibré sur le
+  VRAI `compte_plasmide` de chaque variant. `D=1e6` choisi pour matcher le ratio reads/variant global
+  réel (~21-39 selon le CSV) à cette échelle réduite — au lieu du `D=1e8` (100x trop dense) repris
+  d'AAV9 dans les notebooks précédents. Sanity check `r(score GT, réel)=+0.201` cohérent avec les
+  chiffres déjà connus. Mais `r(sim_viab, réel)` chute à `+0.099` (+0.092 après dithering) — bien en
+  dessous des +0.196/+0.266 obtenus à `D=1e8`. Dithering (même technique qu'`AAV5_viab_sorting.ipynb`,
+  quantum réel=0.5/simulé=1) confirme que ce n'est pas un artefact de visualisation : la distribution
+  réelle ditherée reste bimodale (2 pics, -2.28/+0.70) mais la SIMULÉE devient unimodale (1 pic,
+  +0.18) — le bruit de mesure simulé (NGS `Multinomial` + `noise_viab=0.5`) à cette profondeur noie
+  le signal déterministe F+J, alors que le signal biologique réel reste visible dans les vraies
+  données à ce même ordre de grandeur de comptage. Accord réplicat-réplicat simulé seulement +0.35.
+  **Mise à jour (même jour) : refit `F_viab`/`J_viab` directement sur ces 50 000 variants** (au lieu
+  des poids globaux fit sur 3.8M lignes), pour trancher entre "décalage poids/échantillon" et "bruit
+  de protocole". Résultat : le fit local généralise MOINS bien (r held-out sur split interne 25k/25k
+  = +0.152, pire que le +0.201 du fit global sur ce même échantillon — design rank-déficient à cette
+  échelle, 4842/8541). Avec les poids refit sur les 50 000 en entier (le GT le plus favorable
+  possible pour cet échantillon), `r(sim_viab, réel)` remonte à +0.179 (+0.171 dithéré) — mieux que
+  +0.099, mais **la distribution simulée ditherée reste UNIMODALE** (1 pic) alors que la réelle
+  reste bimodale (2 pics, inchangé). **Conclusion renforcée : c'est bien le bruit de mesure simulé à
+  `D=1e6`, pas un décalage de poids GT, qui détruit la bimodalité.** Piste ouverte, toujours pas
+  faite : recalibrer `noise_viab`/`T_viab`/`rho`/`mu` spécifiquement pour AAV5 à ce régime de
+  profondeur. Détail complet dans l'entrée `AAV5/AAV5_viab_fitting_protocol.ipynb` de "Structure du
+  projet" ci-dessus.
+- **2026-09-14 (suite) : le pic "parasite" sur `sim_viab` dans `AAV5_SEL_fitting_protocol_org2org3.ipynb`
+  n'est pas un artefact — c'est une vraie population non-fit, correctement simulée ; le vrai problème
+  est que le `y_viab` réel comparé est déjà conditionné sur succès organoïde.** Correction utilisateur
+  sur mon diagnostic précédent (que j'avais qualifié à tort d'"artefact de pileup au plancher du
+  pseudocount"). Vérifié : `AAV5_organoides_sorted.csv` (3 822 400 variants, filtre `viab` seul, PAS
+  conditionné organoïde) est bien bimodal en `log2_enrichissement_virus_sur_plasmide` (mode non-fit
+  ~-2.9, mode fit ~+0.9/+1.4) — même structure que `fit4functionaav9.csv`. Le CSV `_sel_org2org3.csv`
+  utilisé pour la comparaison de ce notebook conditionne sur `compte_organoide_{2,3}_adn > 0`, ce qui
+  exclut structurellement le mode non-fit côté réel (un signal organoïde suppose que le virus a
+  d'abord été produit : `compte_virus` y est strictement >0 sur les 50 000 lignes vérifiées) — donc
+  comparer ce `y_viab` (survivant only) au `sim_viab` complet (bimodal) n'est pas une comparaison
+  juste. Nouveau notebook `AAV5_viab_sorting.ipynb` (exécuté) : reprend le filtre `viab` sur la
+  population complète en 2 étapes contrôlées (7m8 seul, puis retrait des seuls comptages nuls) plutôt
+  que le bornage `[10,500]` à tâtons de l'ancien filtre — `compte_virus` n'est JAMAIS nul dans tout le
+  CSV brut (5 595 543 lignes), donc "retirer les 0 counts" ne filtre que `compte_plasmide == 0`
+  (9.84%, exactement la fraction déjà non-finie de la colonne fournie — n'ajoute rien à `isfinite()`).
+  Résultat : 5 044 820 variants conservés (90.2%) contre 3 822 400 (68.3%) pour l'ancien filtre, mais
+  distribution plus fragmentée (6 pics vs 4, moins bien séparés en 2 clusters).
+  **Piste tranchée par dithering** (ajouté au même notebook, même tour) : `compte_plasmide`/
+  `compte_virus` sont TOUJOURS des multiples exacts de 0.5 (100% des lignes), et en dessous de
+  `compte_plasmide < 5` il n'existe que 10 valeurs de comptage possibles dans tout le CSV — d'où les
+  pics fins (des centaines de milliers de variants sans rapport partagent le même couple de
+  comptages, donc le même ratio, par manque de résolution). Ajout d'un bruit `Uniform(-0.25,+0.25)`
+  aux comptages avant de recalculer le ratio (`eps=0.5`, visualisation uniquement, ne remplace rien
+  en aval) : sur la population "comptages nuls seuls retirés" (`df_nz`, 5 044 820 lignes), le
+  dithering fait ENTIÈREMENT disparaître la bimodalité — une seule bosse large, unimodale. Sur
+  l'ancien filtre `[10,500]` (3 822 400 lignes), la bimodalité SURVIT au dithering (2 pics nets,
+  vallée franche) — donc pas un artefact là. Sweep de `PLASMID_MIN` (0/2/5/8/10/15/20/30, dithering
+  à chaque seuil, "vallée/pics" = profondeur de la vallée entre les 2 modes, 1=unimodal, →0=séparé) :
+  unimodal jusqu'à 5, bimodalité apparaît à 8 (vallée=0.699) et se renforce à 10 (0.630) — puis
+  rendements décroissants (15→0.533, 20→0.495, 30→0.447 pour une perte de diversité sévère,
+  3.82M→1.21M). **Conclusion : l'ancien `PLASMID_MIN=10` n'était pas arbitraire — il tombe quasiment
+  exactement sur le seuil où la bimodalité réelle devient robuste ; en dessous, la population est
+  dominée par du bruit de comptage qui noie tout signal fit/non-fit, même une fois la discrétisation
+  corrigée.** Recommandation retenue : garder `AAV5_organoides_sorted.csv` comme CSV `viab` de
+  référence, ne PAS le remplacer par `AAV5_organoides_sorted_viab.csv` (écrit à titre exploratoire
+  seulement, insuffisant). Détail complet dans l'entrée `AAV5/AAV5_viab_sorting.ipynb` de "Structure
+  du projet" ci-dessus.
+- **2026-09-14 : meilleur résultat AAV5 `sel_org2` de la session (r held-out +0.596), via un
+  filtre par intersection de réplicats plutôt qu'un seuil de comptage.** Nouveau notebook
+  `Modelization_V2/notebooks/notebooks/Selectivity/AAV5/AAV5_sel_sorting.ipynb` : filtre **`sel`**
+  (pendant du filtre existant, renommé **`viab`**) qui borne `compte_virus` (dénominateur de
+  `sel_org_i`, même rôle que `compte_plasmide` pour `viab`) ; extension avec un seuil sur
+  `compte_organoide_2_adn` ; puis, motivé par le constat qu'un seuil de magnitude ne peut pas
+  distinguer "signal faible réel" de "sous-échantillonné", un **filtre par intersection de
+  réplicats** (`compte_organoide_2_adn > 0` ET `compte_organoide_3_adn > 0`, moins le 7m8) — même
+  logique que `AAV5_SEL_potts_readout_depth.ipynb` mais sans seuil de magnitude à choisir.
+  `ShallowProfileMLP` entraîné sur les 4 variantes dans
+  `AAV5_SEL_profile_model_sel_sorting.ipynb` : brut +0.429, sel(virus) +0.430, sel_org2(virus+org2)
+  +0.453, **sel_org2∩org3 +0.596** (n_fit=62 300, 30% du volume du filtre dur précédent). Une
+  piste alternative (pondération inverse-variance dans la loss MSE, au lieu d'un filtre dur) a été
+  testée et **écartée** — dégradait `r` partout car dominée par quelques poids extrêmes issus de
+  comptages de contamination ; détail dans la section AAV5 de "Structure du projet" ci-dessus
+  (`AAV5_SEL_profile_model_sel_org2_invvar.ipynb`, notebook depuis supprimé). Au passage :
+  `AAV5_SEL_deep_profile_model_sel_org2.ipynb` (DeepProfileMLP vs ShallowProfileMLP) supprimé du
+  dossier actif par l'utilisateur — Deep systématiquement un peu pire que Shallow sur `sel_org2`
+  (Δr ≈ -0.011/-0.012), d'où l'abandon de la variante deep pour la suite. Deux CSV dérivés
+  obsolètes supprimés (`AAV5_organoides_classements.csv`, `AAV5_organoides_sorted_organoide.csv` —
+  plus référencés par aucun notebook actif).
 - **2026-09-09 : `fit_weights_potts_from_data` accepte un `lam` fixe (RegressionV1.py V2).**
   `lam=None` (défaut) garde la sélection par CV ; `lam=0` fait un fit minimum-norm non
   régularisé (lstsq SVD, `fit_weights_potts_unregularized` — qui accepte maintenant aussi
