@@ -492,7 +492,25 @@ Directed-Evolution-loop/
 │                                        #     enrichment) d'une librairie designée).
 │                                        #   - selectivity_aav2_aav5_session_brief.md (2026-09-07) : brief à coller dans une
 │                                        #     session fraîche pour traiter les données AAV2/AAV5 organoïdes (cf. ci-dessous).
-│   ├── notebooks/notebooks/Selectivity/  # (2026-09-07, ajout utilisateur) AAV2_organoides.csv (4.27M lignes, 34 col) +
+│   ├── notebooks/notebooks/AAVs dataset/  # ⚠ RENOMMÉ (2026-09-15, geste utilisateur dans l'IDE, en
+│                                        #   parallèle de cette session — PAS un `git mv` de Claude, déplacement
+│                                        #   filesystem brut) : ancien `notebooks/notebooks/Selectivity/` (AAV2/AAV5,
+│                                        #   décrit juste en dessous) fusionné avec l'ancien `notebooks/notebooks/
+│                                        #   Viability/` + son duplicata `notebooks/notebooks/notebooks/Viability/`
+│                                        #   (AAV9, décrit plus bas dans cette section) en UN SEUL arbre par sérotype :
+│                                        #   `AAVs dataset/AAV2/`, `AAVs dataset/AAV5/`, `AAVs dataset/AAV9/`. AAV2 et
+│                                        #   AAV5 gardent la structure `viability/`/`selectivity/` ×
+│                                        #   `sorting/`/`analysis of noise/`/`analysis of recovery/` mise en place plus
+│                                        #   tôt le même jour (cf. réorg ci-dessous) ; AAV9 (viabilité uniquement) est
+│                                        #   maintenant sous `AAV9/viability/` (à plat, tous les notebooks AAV9
+│                                        #   directement dedans — pas de sous-catégorie sorting/noise/recovery, comme
+│                                        #   avant). Toutes les entrées historiques de cette section (ci-dessous et plus
+│                                        #   bas, y compris celles sous l'ancien `└── notebooks/`/`└── notebooks/
+│                                        #   Viability/`) gardent leur chemin d'écriture d'origine — lire cette note
+│                                        #   pour l'emplacement réel actuel. Nouveau : `AAV2/viability/
+│                                        #   AAV2_potts_regression.ipynb` (2026-09-15, Claude) — cf. son entrée dédiée
+│                                        #   plus bas dans "État actuel".
+│                                        # (2026-09-07, ajout utilisateur) AAV2_organoides.csv (4.27M lignes, 34 col) +
 │                                        #   AAV5_organoides.csv (5.60M lignes, 35 col) — données NGS réelles IDV
 │                                        #   CONFIDENTIELLES, gitignorées (*.csv + entrées nommées explicites), NE JAMAIS
 │                                        #   committer/pousser/uploader. Viabilité : compte_plasmide/compte_virus +
@@ -522,6 +540,46 @@ Directed-Evolution-loop/
 │                                        #   ci-dessous pour chacun de ces fichiers gardent leur chemin historique
 │                                        #   `AAV5/AAV5_SEL_*.ipynb` tel qu'écrit au moment des faits — lire
 │                                        #   `AAV5/obsolete/AAV5_SEL_*.ipynb` pour les retrouver sur disque aujourd'hui.
+│                                        #   ⚠ RÉORGANISATION (2026-09-15, demande utilisateur) : les notebooks ACTIFS
+│                                        #   d'AAV2/ et AAV5/ sont déplacés (`git mv`, historique préservé) dans des
+│                                        #   sous-dossiers `viability/`/`selectivity/`, eux-mêmes subdivisés par
+│                                        #   contenu en `sorting/`, `analysis of noise/`, `analysis of recovery/`.
+│                                        #   Nouveau layout : `AAV2/viability/sorting/AAV2_viab_sorting.ipynb` ;
+│                                        #   `AAV2/viability/analysis of noise/{AAV2_viab_noise_ceiling,
+│                                        #   AAV2_viab_profile_model_denoising, AAV2_viab_profile_model_denoising_v2,
+│                                        #   AAV2_viab_profile_model_aux_depth_analysis}.ipynb` (la dernière — technique
+│                                        #   de débruitage par feature auxiliaire — rejoint ses notebooks source plutôt
+│                                        #   que la catégorie recovery) ; `AAV2/viability/analysis of recovery/
+│                                        #   {AAV2_viab_profile_model, AAV2_viab_fitting_protocol,
+│                                        #   AAV2_viab_top10k_potts_protocol_mlp, AAV2_viab_top50k_potts_protocol_mlp}.ipynb` ;
+│                                        #   `AAV5/viability/sorting/AAV5_viab_sorting.ipynb` ;
+│                                        #   `AAV5/viability/analysis of noise/{AAV5_viab_noise_ceiling,
+│                                        #   AAV5_viab_noise_ceiling_sans_borne_plasmide}.ipynb` ;
+│                                        #   `AAV5/viability/analysis of recovery/AAV5_viab_fitting_protocol.ipynb` ;
+│                                        #   `AAV5/selectivity/AAV5_SEL_analysis.ipynb` (reste à la racine de
+│                                        #   `selectivity/` — exploration générale viab+sel, ne rentre dans aucune des 3
+│                                        #   sous-catégories) ; `AAV5/selectivity/sorting/{AAV5_sel_sorting,
+│                                        #   AAV5_SEL_potts_readout_depth}.ipynb` ; `AAV5/selectivity/analysis of
+│                                        #   recovery/{AAV5_SEL_fitting_protocol_org2org3,
+│                                        #   AAV5_SEL_profile_model_sel_sorting}.ipynb`. `AAV5/obsolete/` **non touché**
+│                                        #   (reste à plat, déjà hors du flux actif). **Les CSV (bruts et dérivés)
+│                                        #   restent en place** à la racine d'AAV2/ et AAV5/, PAS déplacés — ce sont des
+│                                        #   données partagées entre plusieurs catégories (ex. `AAV5_organoides_sorted.csv`
+│                                        #   consommé à la fois par des notebooks viab et sel), et chaque notebook les
+│                                        #   résout déjà via un fallback location-independent (`Path("X.csv")` sinon
+│                                        #   `root / "notebooks/notebooks/Selectivity/AAV{2,5}/X.csv"`, `root` retrouvé
+│                                        #   en remontant jusqu'au dossier `Modelization_V2` — idem pour `lib/` via
+│                                        #   `root / "lib"`) qui ne dépend pas de l'emplacement du notebook lui-même —
+│                                        #   vérifié programmatiquement après coup (tous les chemins CSV/npy référencés
+│                                        #   se résolvent encore). **Zéro ligne de code modifiée dans les notebooks
+│                                        #   déplacés.** Comme pour la réorg du 2026-09-11 : les entrées historiques
+│                                        #   ci-dessous gardent leur chemin d'écriture d'origine (`AAV5/AAV5_SEL_*.ipynb`,
+│                                        #   `AAV2/AAV2_viab_*.ipynb` sans sous-dossier) — lire le nouveau layout
+│                                        #   ci-dessus pour les retrouver sur disque aujourd'hui. Quelques citations en
+│                                        #   prose à l'intérieur de certains notebooks (ex. "cf. `obsolete/AAV5_SEL_
+│                                        #   sorting.ipynb`") pointent vers un chemin désormais inexact depuis le nouvel
+│                                        #   emplacement du notebook citant — non corrigées (texte non fonctionnel, la
+│                                        #   résolution de fichier réelle du code n'en dépend jamais).
 │                                        # AAV5/AAV5_SEL_analysis.ipynb : analyse des hyperparamètres (D par checkpoint,
 │                                        #   classements de comptage, contamination 7m8) + régression Potts GT viab +
 │                                        #   sélectivité (3 réplicats organoïde). Section 3 : `R.fit_weights_potts_from_data`
@@ -1210,6 +1268,44 @@ jamais un « score » (ne pas écrire "predicted score", "F_score", "J_score", "
 
 ## État actuel
 
+- **2026-09-15 (suite) : nouveau notebook `AAV2_potts_regression.ipynb`, GT Potts pour AAV2 basée
+  sur `Modelization_V1/notebooks/aav_viability_test/aav2.csv` (53 382 séquences, PAS le CSV
+  organoïde IDV `AAV2_organoides.csv` déjà utilisé ailleurs dans `AAVs dataset/AAV2/`), demandé
+  explicitement par l'utilisateur ("même type de retrieval que pour fit4function").** Copié
+  self-contained dans `AAVs dataset/AAV2/viability/aav2.csv` (gitignoré comme `aav9.csv`/
+  `fit4functionaav9.csv`, même convention que la migration V1→V2 du 2026-08-31) plutôt que lu
+  cross-repo depuis `Modelization_V1`. Méthode : `RegressionV1.fit_weights_potts_from_data`
+  (même fonction que `AAV9_potts_regression.ipynb` et la Part A d'`AAV9_fit4function_potts_vs_mlp.
+  ipynb`) — full-data CV, comparaison held-out à un baseline group-means local (50/50,
+  `random_state=0`), percentile recovery, check de crédibilité brute-force top-500, export.
+  **Écart déterminé par rapport au docstring de la fonction** : celui-ci suggère
+  `sample_weight=1/error**2` pour aav2.csv/aav5.csv (colonne `error` réelle, contrairement à la
+  constante 0.1 d'aav9.csv) — vérifié puis écarté, `1/error**2` est dominé par une poignée de
+  lignes (top 100/53 382 lignes = 45% du poids total, top 1000 = 84%), même pathologie que
+  `AAV5_SEL_profile_model_sel_org2_invvar.ipynb` (déjà abandonné dans ce projet pour la même
+  raison). Utilisé à la place : la formule inverse-variance standard du projet sur les comptages
+  bruts `plasmid`/`vector` (`eps=0.5`, top 100 lignes = 11% du poids, top 1000 = 43% — bien mieux
+  réparti), justifié aussi par le fait que `target` reconstruit quasi exactement comme
+  `log2((vector+0.5)/(plasmid+0.5))` (r=+0.987) — `target` EST déjà ce log enrichment `eps=0.5`
+  standard du projet, donc pondérer par ces mêmes comptages est le choix cohérent. Path resolution
+  vers `lib/` via le pattern robuste (remontée jusqu'à `Modelization_V2/`) déjà utilisé partout
+  dans `Selectivity/AAV{2,5}` — PAS le `../../lib` en dur des notebooks AAV9 plus anciens
+  (`AAV9_potts_regression.ipynb`/`AAV9_potts_GT_score_study.ipynb`), un bug déjà documenté
+  ailleurs dans ce fichier (ne pointe plus nulle part depuis leur emplacement actuel, import
+  silencieux du lib pip-installé de V1) — pas corrigé dans ces notebooks-là, juste évité dans le
+  nouveau. Export `lib/aav2_F_viab_potts.npy`/`aav2_J_viab_potts.npy` (SANS suffixe, miroir exact
+  de `aav9_F_viab_potts.npy` — le GT canonique construit directement depuis l'aav2.csv éponyme,
+  distinct de `aav2_F_viab_potts_sorted_cv.npy` qui vient du CSV organoïde IDV). Logique validée
+  par un smoke-test sur un sous-échantillon de 4000 lignes (grille lambda réduite, pas de plot) —
+  **notebook lui-même jamais exécuté**, conforme à `feedback_user_runs_notebooks` (l'utilisateur
+  lance lui-même les notebooks coûteux).
+- **2026-09-15 : réorganisation des notebooks actifs `Selectivity/AAV2` et `Selectivity/AAV5` en
+  sous-dossiers `viability/`/`selectivity/` × `sorting/`/`analysis of noise/`/`analysis of
+  recovery/`, sur demande explicite de l'utilisateur.** `git mv` (historique préservé), CSV laissés
+  en place à la racine d'AAV2/AAV5 (données partagées, déjà résolues par un fallback
+  location-independent dans chaque notebook — vérifié, zéro code modifié), `AAV5/obsolete/` non
+  touché. Mapping complet ancien chemin → nouveau chemin dans l'entrée `notebooks/notebooks/
+  Selectivity/` de "Structure du projet" ci-dessus.
 - **2026-09-14 (suite) : plus de dithering à l'avenir (feedback utilisateur) ; 3 nouveaux notebooks
   AAV2 écrits (fitting_protocol, profile_model, top10k Potts+Protocol+MLP) mais AUCUN exécuté —
   l'utilisateur lance lui-même les notebooks coûteux depuis cette session.** Deux préférences
