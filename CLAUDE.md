@@ -580,6 +580,32 @@ Directed-Evolution-loop/
 │                                        #   sorting.ipynb`") pointent vers un chemin désormais inexact depuis le nouvel
 │                                        #   emplacement du notebook citant — non corrigées (texte non fonctionnel, la
 │                                        #   résolution de fichier réelle du code n'en dépend jamais).
+│                                        #   ⚠ RÉORGANISATION (2026-09-18, demande utilisateur) : nouveau dossier
+│                                        #   `AAV2/obsolete_dense_matrix_potts_regression/` — archive (nom explicite :
+│                                        #   c'est la MÉTHODE DE RÉGRESSION qui a changé, pas juste un rangement) des 6
+│                                        #   notebooks AAV2 dont le rôle est de FITTER F/J par régression de Potts (pas
+│                                        #   les notebooks downstream qui consomment déjà des `.npy` exportés) :
+│                                        #   `AAV2_viab_sorting.ipynb`, `AAV2_potts_regression.ipynb`,
+│                                        #   `AAV2_viab_top{10,50}k_potts_protocol_mlp.ipynb`,
+│                                        #   `AAV2_SEL_potts_readout_depth.ipynb`,
+│                                        #   `AAV2_SEL_potts_proportional_agreement.ipynb` — chacun reconstruit à son
+│                                        #   emplacement actif d'origine avec le nouveau solveur matrix-free par défaut
+│                                        #   du projet (`RegressionV1.fit_weights_potts_from_data_matrixfree`, cf.
+│                                        #   entrée dédiée dans "État actuel" 2026-09-18 et `Modelization_V2/README.md`
+│                                        #   section "Update 2026-09-18"). Reconstruction MÉCANIQUE (même signature
+│                                        #   d'appel/retour que l'ancienne fonction) : uniquement
+│                                        #   `R.fit_weights_potts_from_data(` → `R.fit_weights_potts_from_data_matrixfree(`
+│                                        #   partout + nettoyage des quelques prints `rank={...}/8541` (le nouveau
+│                                        #   solveur itératif n'a pas de diagnostic de rang SVD, `rank` vaut toujours
+│                                        #   `None`) + note markdown ajoutée en tête de chaque notebook. Structure,
+│                                        #   sweeps, heatmaps, exports, sections : INCHANGÉS — seul le moteur de fit
+│                                        #   change. Sorties de cellules effacées sur les 6 (méthode de fit changée,
+│                                        #   anciens chiffres plus valides) — **notebooks préparés mais jamais exécutés
+│                                        #   par Claude** (`feedback_user_runs_notebooks`, retour à la convention
+│                                        #   habituelle après la dérogation ponctuelle des 2 notebooks MLE/matrix-free
+│                                        #   eux-mêmes exécutés plus tôt le même jour). Logique validée par smoke-test
+│                                        #   sur données réelles (le code exact d'`AAV2_viab_sorting.ipynb` rejoué sur
+│                                        #   un sous-échantillon de 4 000 lignes, CV + lam=0, sans erreur).
 │                                        # AAV5/AAV5_SEL_analysis.ipynb : analyse des hyperparamètres (D par checkpoint,
 │                                        #   classements de comptage, contamination 7m8) + régression Potts GT viab +
 │                                        #   sélectivité (3 réplicats organoïde). Section 3 : `R.fit_weights_potts_from_data`
@@ -1056,8 +1082,9 @@ Directed-Evolution-loop/
 │                                        #   de mémoire, le design Potts dense (N,8541) devenant trop volumineux ; corrigé
 │                                        #   en exportant directement les poids déjà validés held-out, même convention
 │                                        #   qu'`AAV5_SEL_analysis.ipynb` qui n'a jamais fait ce refit non plus). Exécuté
-│                                        #   (nbconvert, CPU, ~5 min dont ~4 min de CV). Piste ouverte, non faite ici :
-│                                        #   notebook de sélectivité AAV2 (organoïde/noyaux).
+│                                        #   (nbconvert, CPU, ~5 min dont ~4 min de CV). Piste ouverte à l'époque —
+│                                        #   adressée le 2026-09-16, cf. `AAV2/selectivity/` plus bas : notebook de
+│                                        #   sélectivité AAV2 (organoïde/noyaux).
 │                                        # AAV2/AAV2_viab_fitting_protocol.ipynb (2026-09-14) : pendant AAV2
 │                                        #   d'`AAV5_viab_fitting_protocol.ipynb` — `ProtocolV3` (viab seule,
 │                                        #   `F_sel=J_sel=0`) sur 50 000 variants sous-échantillonnés
@@ -1101,6 +1128,91 @@ Directed-Evolution-loop/
 │                                        #   table de comparaison finale des 3 r held-out. Écrit mais **jamais
 │                                        #   exécuté** (même raison — l'utilisateur lance lui-même les notebooks
 │                                        #   coûteux depuis cette session, cf. mémoire `feedback_user_runs_notebooks`).
+│                                        # AAV2/selectivity/sorting/AAV2_SEL_potts_readout_depth.ipynb (2026-09-16,
+│                                        #   nouveau dossier `AAV2/selectivity/` — premier notebook de sélectivité
+│                                        #   AAV2) : port direct de `AAV5/selectivity/sorting/
+│                                        #   AAV5_SEL_potts_readout_depth.ipynb`, demandé explicitement comme "filtre
+│                                        #   analogue au meilleur filtre trouvé avec AAV5" — même modèle de Potts
+│                                        #   (F+J, 8541 features), même loss/solveur (`fit_weights_potts_from_data`),
+│                                        #   mêmes poids inverse-variance `eps=0.5`. Le filtre : `compte_organoide_adn
+│                                        #   ≥ T` ET `compte_virus ≥ T` appliqué à la fois à org2 ET org3 (correspondance
+│                                        #   entre réplicats + minimum de comptage combinés en un seul critère, PAS
+│                                        #   juste `>0`), balayé sur `THRS=[0,5,10,20,30,50,100]`, org1 exclu du fit
+│                                        #   (outlier sur AAV5, à reconfirmer sur AAV2 — §1 du notebook). Différence
+│                                        #   avec le port AAV5 : `AAV2_organoides_sorted.csv` (produit par
+│                                        #   `AAV2_viab_sorting.ipynb` §8) ne garde que les colonnes viab
+│                                        #   (`sequence`/`compte_plasmide`/`compte_virus`/cible viab, `usecols`
+│                                        #   restreint à l'époque) — pas les colonnes organoïde dont ce notebook a
+│                                        #   besoin. Charge donc `AAV2_organoides.csv` BRUT (34 colonnes) directement
+│                                        #   et redérive en ligne le même filtre qualité-viab que
+│                                        #   `AAV2_viab_sorting.ipynb` §8 (`PLASMID_MIN=1`, `RATIO_MAX=100` sur
+│                                        #   `virus/plasmide`) comme population de base, avant d'empiler le seuil de
+│                                        #   profondeur du readout par-dessus. Pas de retrait type 7m8 (hamming) :
+│                                        #   `AAV2_viab_sorting.ipynb` §3 n'a trouvé aucun spike-in côté plasmide
+│                                        #   analogue au 7m8 d'AAV5 pour ce dataset. 9 sections (plafond de
+│                                        #   reproductibilité vs T, sweep λ=0, check CV à quelques T, heatmaps F/J
+│                                        #   (une ligne par seuil de `THRS`, PAS juste T=0/T_CHOSEN — bug corrigé le
+│                                        #   même jour, cf. plus bas), coût en diversité, fit mutualisé org2+org3 à
+│                                        #   `T_CHOSEN` + export, scatter score-vs-réel held-out, histogramme du
+│                                        #   score GT, conclusion) — structure identique au notebook AAV5 source.
+│                                        #   **⚠ Décision (2026-09-16) : `T_CHOSEN=5`, pas 20** (le choix de départ
+│                                        #   repris tel quel du port AAV5) — contrairement à AAV5, `r(F2,F3)` (accord
+│                                        #   des poids entre réplicats) sur AAV2 n'est PAS monotone croissant en `T` :
+│                                        #   il culmine à `T=0-5` (+0.645/+0.647) puis CHUTE jusqu'à `T=30` (+0.185,
+│                                        #   `T=20` tombait précisément dans ce creux à +0.259) avant de remonter à
+│                                        #   `T=100` (+0.733, mais seulement 6-7k variants). Exporte
+│                                        #   `lib/aav2_{F,J}_sel_pool_potts_sorted_readoutT5_unreg.npy` (gitignorés) —
+│                                        #   les fichiers `..._readoutT20_unreg.npy` d'un run antérieur à cette
+│                                        #   décision restent sur disque mais ne sont plus le choix de production.
+│                                        #   Logique validée par un smoke-test sur un échantillon aléatoire ~12% du
+│                                        #   CSV brut (pipeline complet : sweep, fit mutualisé, top-k recovery,
+│                                        #   scatter) — **notebook lui-même jamais exécuté par Claude dans son
+│                                        #   ensemble** (`feedback_user_runs_notebooks`). Bug corrigé le même jour
+│                                        #   (édition IDE utilisateur, pas Claude) : la grille de heatmaps §4 avait
+│                                        #   `plt.subplots(7, 3, ...)` mais la boucle ne parcourait que `[0, T_CHOSEN]`
+│                                        #   (2 valeurs) — 5 lignes sur 7 restaient vides ; boucle corrigée pour
+│                                        #   parcourir `THRS` en entier (les poids `W[(T,2)]`/`W[(T,3)]` existaient
+│                                        #   déjà pour chaque seuil, calculés en section 2).
+│                                        # AAV2/selectivity/analysis of recovery/AAV2_SEL_fitting_protocol_org2org3.ipynb
+│                                        #   (2026-09-16) : port direct de `AAV5/selectivity/analysis of recovery/
+│                                        #   AAV5_SEL_fitting_protocol_org2org3.ipynb` — `ProtocolV3` (classe
+│                                        #   mécaniste, viab+sélectivité) simulée sur 50 000 variants sous-échantillonnés
+│                                        #   de la population org2∩org3, pour voir si le protocole simulé reproduit des
+│                                        #   distributions/corrélations plausibles. Différence avec le port AAV5 :
+│                                        #   aucun CSV org2∩org3 pré-construit n'existe pour AAV2 (contrairement à
+│                                        #   `AAV5_organoides_sorted_sel_org2org3.csv`) — section 0 (nouvelle, pas dans
+│                                        #   le notebook source) construit cette population EN LIGNE directement depuis
+│                                        #   `AAV2_organoides.csv` brut : filtre qualité-viab (`plasmid≥1, ratio≤100`,
+│                                        #   même que `AAV2_viab_sorting.ipynb`, pas de retrait 7m8 — aucun trouvé pour
+│                                        #   AAV2) puis intersection stricte `compte_organoide_2_adn>0 ET
+│                                        #   compte_organoide_3_adn>0`. Poids : sélectivité =
+│                                        #   `aav2_F_sel_pool_potts_sorted_readoutT5_unreg.npy` (T=5, décision du jour,
+│                                        #   cf. entrée précédente) ; viabilité = `aav2_F_viab_potts_sorted_cv.npy`
+│                                        #   (lignée organoïde/haute-diversité d'`AAV2_viab_sorting.ipynb`) — **PAS**
+│                                        #   `aav2_F_viab_potts_plasmid50_vectorpos_cv.npy` (la GT canonique par défaut
+│                                        #   décidée dans `AAV2_potts_regression.ipynb` §12c), délibérément écarté ici
+│                                        #   car il vient d'un CSV totalement différent (basse diversité, `aav2.csv`) —
+│                                        #   choix motivé pour rester dans la même lignée de données (mêmes séquences
+│                                        #   organoïde) que les poids de sélectivité, comme le fait déjà le notebook
+│                                        #   AAV5 source (qui n'a qu'une seule lignée viab, donc where ce choix n'y
+│                                        #   était pas ambigu). Paramètres protocole "classiques" NON recalibrés pour
+│                                        #   AAV2 — repris tels quels du point de fonctionnement `AAV5_SEL_fitting_
+│                                        #   protocol.ipynb` (`rho=1e-3, mu=50, T_viab=T_sel=1/ln(2),
+│                                        #   noise_viab=noise_sel=0.5, D=1e8, dilution_factor=1e5`), aucun sweep. Même
+│                                        #   winsorisation p99 de `plasmid_count=avg(org2,org3)` (calibration
+│                                        #   `lambda0=plasmid_count*dilution_factor`) que le port AAV5, même raison
+│                                        #   numérique (`produce_capsids()` OOM sans cap). 9 sections (miroir du
+│                                        #   notebook source, section 0 en plus) : sous-échantillon + librairie
+│                                        #   initiale, poids Potts, score GT déterministe vs réel (plafond), config
+│                                        #   `ProtocolV3` + 3 réplicats simulés, viabilité réel/simulé, sélectivité
+│                                        #   réel(org2,org3)/simulé, recovery top-k%, population à travers le pipeline,
+│                                        #   notes. Logique validée par un smoke-test sur données réelles (échantillon
+│                                        #   25% du CSV brut, poids factices aux bonnes dimensions puisque
+│                                        #   `readoutT5` n'existe pas encore tant que la section 6 du notebook
+│                                        #   readout-depth n'a pas été relancée à `T_CHOSEN=5`) — pipeline complet
+│                                        #   (population org2∩org3, simulation `ProtocolV3` 3 réplicats, recovery,
+│                                        #   tableaux population) exécuté sans erreur — **notebook lui-même jamais
+│                                        #   exécuté par Claude dans son ensemble** (`feedback_user_runs_notebooks`).
 │   ├── lib/                             # copies de sequence_classesV1.py/analysisV1.py/RegressionV1.py/
 │                                        #   initialize_weights.py/cross_packaging_draft.py (aucune ne contient de
 │                                        #   mutant-scan) + aav9_{F,J}_viab_potts.npy (la nouvelle GT) +
@@ -1268,6 +1380,449 @@ jamais un « score » (ne pas écrire "predicted score", "F_score", "J_score", "
 
 ## État actuel
 
+- **2026-09-18 (suite) : plafonds de population `N_FIT`/`N_EVAL` retirés dans les 2 notebooks
+  reconstruits qui en avaient un réellement motivé par la mémoire** (`AAV2_viab_sorting.ipynb` :
+  `N_FIT,N_EVAL=90_000,120_000` ; `AAV2_SEL_potts_readout_depth.ipynb` : `N_FIT=60_000`,
+  répété dans 3 sites — sweep §2, CV §3, `S_pool` mutualisé §6). Suite à la question utilisateur
+  "on a changé le type de solveur mais est-ce que tu as bien changé la taille des datasets de
+  fitting (vu qu'on a plus de ceiling)" : le rebuild mécanique précédent (entrée ci-dessous)
+  avait délibérément laissé structure/tailles inchangées, donc ces deux caps — hérités de
+  l'ancien solveur dense/SVD, l'un documenté noir sur blanc comme réponse à un crash mémoire à
+  210k lignes — étaient restés actifs malgré le nouveau solveur matrix-free qui n'en a plus
+  besoin. **Audit complet des 6 notebooks reconstruits avant de toucher quoi que ce soit** :
+  seuls ces deux-là avaient un cap réellement lié à la mémoire ; `AAV2_potts_regression.ipynb`
+  (aav2.csv, 53 382 séquences) n'en a jamais eu besoin, `AAV2_viab_top{10,50}k_potts_protocol_
+  mlp.ipynb` (`N_TOP=50 000`) est un choix de qualité de données délibéré — pas une contrainte
+  de calcul, et `AAV2_SEL_potts_proportional_agreement.ipynb` fit déjà sur la population
+  filtrée complète sans sous-échantillonnage superposé — ces 4-là **volontairement pas
+  touchés**. `fit_i`/`eval_i` (resp. `tr_fit`, `S_pool`) utilisent désormais directement le
+  split train/test complet, sans sous-échantillonnage `RNG.choice`. Logique re-vérifiée par
+  smoke-test sur données réelles (même code exact, population non cappée) — **notebooks
+  toujours jamais exécutés par Claude** (`feedback_user_runs_notebooks`).
+- **2026-09-18 (suite) : deux nouveaux notebooks `{AAV2,AAV5}_dataset_overview.ipynb`** — vue
+  d'ensemble brute des CSV `{AAV2,AAV5}_organoides.csv`, à la racine de chaque dossier de
+  sérotype (pas dans `viability/`/`selectivity/`, puisqu'ils couvrent les colonnes des deux à la
+  fois). Trois sections seulement, sur demande explicite ("just mets y des infos importantes") :
+  (1) `df.describe()` (percentiles étendus `.01`/`.05`/`.95`/`.99` en plus des quartiles, vu la
+  queue lourde des colonnes de comptage) sur toutes les colonnes numériques ; (2) reads à chaque
+  checkpoint (une ligne par colonne `compte_*`) — `total_reads`, `reads/variant` sur tout le
+  dataset ET parmi les seuls variants détectés (`count>0`, precisé par l'utilisateur), `fraction>0`
+  + table de comptage par seuil via `analysisV1.number_of_seq_threshold` (réutilisé tel quel, déjà
+  établi dans `AAV2_potts_regression.ipynb` §1b) ; (3) top 100 séquences par colonne (`nlargest`,
+  comptages ET log2 enrichissements), stocké intégralement dans un dict `top100[colonne]`, seul le
+  top 10 affiché inline par colonne pour rester lisible. Aucun filtre, aucune régression — pur
+  profilage descriptif. Logique smoke-testée sur un sous-échantillon réel des deux CSV (300 000
+  lignes de tête) — **notebooks préparés mais jamais exécutés par Claude**
+  (`feedback_user_runs_notebooks`). **Section 4 ajoutée dans la foulée** (demande explicite,
+  "des scatters plots comparant les org1 2 et 3") : 3 scatters pairwise (hexbin + diagonale y=x +
+  Pearson r, même style que le "plafond de reproductibilité" déjà utilisé partout ailleurs dans
+  ce projet) entre `log2_enrichissement_organoide_{1,2,3}_adn_sur_virus`, tout le dataset, sans
+  filtre. Logique re-vérifiée sur les CSV réels COMPLETS (pas un sous-échantillon) : AAV2
+  org1-vs-org2 r=+0.446 (n=84 732), org1-vs-org3 r=+0.422 (n=107 326), org2-vs-org3 r=+0.505
+  (n=72 671) ; AAV5 org1-vs-org2 r=+0.418 (n=81 449), org1-vs-org3 r=+0.264 (n=77 899),
+  org2-vs-org3 r=+0.694 (n=146 633) — org2/org3 systématiquement plus corrélés qu'avec org1 sur
+  les deux sérotypes, cohérent avec le diagnostic déjà établi ailleurs dans ce projet (org1 =
+  réplicat outlier, écarté des fits de sélectivité AAV5 ET AAV2 pour cette raison).
+- **2026-09-18 (suite) : le solveur matrix-free devient LA méthode de régression de Potts par
+  défaut du projet (pas une variante expérimentale) — nouvelle fonction drop-in
+  `RegressionV1.fit_weights_potts_from_data_matrixfree` + `score_potts` (scorer centralisé),
+  et les 6 notebooks AAV2 qui FITTENT du Potts (pas ceux qui consomment déjà des poids
+  exportés) reconstruits avec, anciennes versions archivées.** Suite à la démonstration que le
+  solveur matrix-free (entrée précédente) bat la ridge classique à pleine échelle : décision
+  utilisateur explicite de l'adopter comme nouvelle base, pas comme une technique "à part"
+  qu'on continuerait à appeler "matrix free" dans la prose des notebooks.
+
+  1. **`RegressionV1.score_potts(seq_matrix, F, J, bias=0.0)`** (nouveau) : centralise le calcul
+     de score Potts par `gather` (`O(N*L²)`, pas de matrice) que CHAQUE notebook de ce projet
+     redéfinissait localement comme `score_FJ` — réutilisé maintenant par la CV du nouveau
+     solveur ; les notebooks continuent de définir leur propre `score_FJ` local (non touché,
+     hors scope de cette passe), mais tout nouveau code peut importer celui-ci à la place.
+  2. **`RegressionV1.fit_weights_potts_from_data_matrixfree`** (nouveau) : remplaçant drop-in de
+     `fit_weights_potts_from_data` — MÊME signature d'appel (`seq_matrix, target, sample_weight,
+     lambdas_grid, k_folds, seed, verbose, lam`) et MÊME forme de retour (`F_hat, J_hat, rank,
+     info` avec `info["lam"]`/`info["cv_mse"]`/`info["lambdas_grid"]`/`info["n_obs"]`), donc un
+     site d'appel existant peut basculer en renommant seulement la fonction. `lam=None`
+     déclenche une CV K-fold — contrairement à `ridge_cv_mse_potts` (matrice dense par fold),
+     celle-ci reste matrix-free de bout en bout : chaque fold refit ET sa MSE de validation
+     passent par `fit_weights_potts_ridge_matrixfree`/`score_potts`, jamais de matrice. `rank`
+     vaut toujours `None` (pas de diagnostic SVD avec un solveur itératif — documenté comme tel
+     dans le docstring, pas une régression silencieuse). Validé par smoke-test contre
+     `fit_weights_potts_from_data` sur données réelles (aav2.csv, lam=0 ET CV small-grid) :
+     `r(F)=r(J)=1.000000`, même lambda choisi par CV, ~4x plus rapide même à 6 000 lignes.
+  3. **Archivage + reconstruction des 6 notebooks AAV2 de fit Potts** (portée décidée avec
+     l'utilisateur : SEULEMENT les notebooks qui fittent F/J, pas ceux qui rechargent des poids
+     déjà exportés — détail complet dans l'entrée `AAV2/obsolete_dense_matrix_potts_regression/`
+     de "Structure du projet" ci-dessous). `git mv` vers le nouveau dossier
+     `AAV2/obsolete_dense_matrix_potts_regression/` (nom choisi pour être explicite : c'est la
+     méthode de régression qui devient obsolète, pas juste un rangement) pour les 4 fichiers
+     déjà trackés, `mv` simple pour les 2 fichiers de `selectivity/` (jamais commités, créés
+     cette session). Reconstruction MÉCANIQUE à l'emplacement actif d'origine de chacun : swap
+     `R.fit_weights_potts_from_data(` → `R.fit_weights_potts_from_data_matrixfree(` (vérifié
+     exhaustif par grep : ces 6 notebooks n'appelaient QUE ce wrapper, jamais les fonctions
+     bas-niveau `fit_weights_potts_unregularized`/`fit_weights_potts`/`build_potts_features`
+     directement — la substitution est donc sûre partout) + nettoyage des prints
+     `rank={var}/8541` devenus trompeurs (`rank` est maintenant toujours `None`) + un `int(rank)`
+     retiré (`AAV2_SEL_potts_readout_depth.ipynb`, aurait levé `TypeError` sur `None`) + note
+     markdown ajoutée en tête de chaque notebook (pointe vers la version archivée + le notebook
+     de validation). **Structure, sections, sweeps, heatmaps, exports : inchangés** — seul le
+     moteur de fit change, aucune autre logique retouchée. Sorties de cellules effacées sur les
+     6 (méthode de fit changée, anciens chiffres plus valides). **Notebooks préparés mais jamais
+     exécutés par Claude** (`feedback_user_runs_notebooks`, décision explicite de l'utilisateur
+     pour cette passe — contraste avec les 2 notebooks MLE/matrix-free eux-mêmes, exécutés pour
+     de vrai plus tôt le même jour). Logique re-vérifiée par un dernier smoke-test rejouant le
+     code EXACT (post-édition) d'`AAV2_viab_sorting.ipynb` sur un sous-échantillon réel de
+     4 000 lignes (CV + lam=0), sans erreur.
+  4. **`Modelization_V2/README.md`** mis à jour (section "Update 2026-09-18: matrix-free solver
+     is now the default fitting method", insérée juste après la description de la procédure de
+     fit historique) — explique le calcul mémoire, le principe matrix-free (rétropropagation
+     d'un `gather` = `Xᵀr`), la validation, et pointe vers cette entrée de CLAUDE.md pour le
+     détail des 6 notebooks reconstruits.
+
+  **Non fait délibérément** (portée confirmée avec l'utilisateur) : les notebooks AAV2
+  downstream (ProtocolV3, MLP, analyse de bruit — qui rechargent déjà des `.npy` exportés) NE
+  SONT PAS reconstruits dans cette passe, ils reprendront les nouveaux poids la prochaine fois
+  qu'ils seront touchés — même convention que la bascule GT Potts du 2026-08-27. AAV5/AAV9 non
+  concernés — pas de migration rétroactive hors AAV2 pour l'instant.
+
+- **2026-09-18 (suite) : solveur ridge "matrix-free" (`RegressionV1.fit_weights_potts_ridge_matrixfree`,
+  message bumpé 1.6→1.7) — valide, 24-65x plus rapide, et RÉVISE la conclusion de l'entrée
+  précédente : la ridge à pleine échelle bat la MLE multinomiale, elle ne fait pas juste la
+  rattraper.** Suite à la question "pourquoi la ridge est limitée à 90k, tu peux quantifier ?" :
+  mesuré empiriquement que `fit_weights_potts_unregularized`/`fit_weights_potts` (matrice de design
+  dense matérialisée) consomment en pic RSS **~5x la taille de `X` elle-même** (14.6 GiB à
+  N=90 000, 40.1 GiB à N=250 000, ratio constant — dû au solveur SVD `lstsq`/`np.linalg.solve`, pas
+  juste au stockage de `X`), plafonnant à ~700-750k lignes sur cette machine (121 GiB RAM) — pas
+  90-150k comme le suggérait l'historique du projet (probablement une machine plus contrainte à
+  l'époque). Nouvelle fonction : même objectif ridge (`0.5*Σw(Xθ-y)² + 0.5*λ||θ_sans_biais||²`)
+  résolu SANS jamais construire `X` — passe avant par `gather` direct sur `seq_matrix` (même calcul
+  que `score_FJ`, `O(N)`, pas de matrice `N×p`), gradient via `jax.grad` (la rétropropagation d'un
+  `gather` EST l'opération matrix-free `X^T@r` — même principe que le "surrogate Potts" de
+  `AAV9_cross_packaging_parameter_sweeps.ipynb`, ici par autodiff plutôt que bincounts manuels),
+  résolu par L-BFGS-B (convexe quadratique → même optimum qu'un solve direct).
+
+  Nouveau notebook `AAVs dataset/AAV2/viability/AAV2_potts_ridge_matrixfree_validation.ipynb`
+  (**exécuté par Claude**, résultats réels) :
+  1. **Validation à n=90 000 (même échantillon que le fit ridge classique)**, `lam=1.0` ET `lam=0.0`
+     (cas non régularisé/minimum-norme, rang-déficient — l'équivalence n'était pas garantie a
+     priori) : `r(F_classique,F_matrixfree)` et `r(J_classique,J_matrixfree)` **> 0.999999** dans
+     les deux cas, `r` held-out identique à la 4e décimale. **Bonus inattendu : 24-65x plus rapide**
+     que le solve classique à cette échelle (1.4-1.5s contre 36.5-91.0s).
+  2. **Passage à l'échelle complète (n=4 153 463, tout le CSV)** : `r` held-out = **+0.302** —
+     **nouveau meilleur résultat de la session pour AAV2 viabilité**, dépasse nettement la ridge
+     classique plafonnée à 90k (+0.202) ET la MLE multinomiale à pleine échelle (+0.205, cf. entrée
+     précédente). Le saut ridge@90k→ridge@4.15M (+0.202→+0.302) est bien plus net que celui de la
+     MLE aux mêmes deux échelles (+0.133→+0.205) — une fois le plafond mémoire levé, la ridge n'est
+     pas juste compétitive avec la MLE, elle la dépasse.
+  3. **Vraie comparaison F/J à N ÉGAL, enfin possible** (les deux méthodes ayant maintenant tourné
+     sur EXACTEMENT les mêmes 4 153 463 lignes) : `r(F_ridge,F_mle)` passe de 0.938 (N dépareillés,
+     entrée précédente) à **0.965**, et surtout `r(J_ridge,J_mle)` de 0.296 à **0.627** — confirme
+     que l'essentiel du désaccord J observé précédemment venait de l'écart d'échantillon (90k vs
+     4.15M), pas d'une différence fondamentale entre les deux objectifs. Désaccord résiduel réel
+     (0.627, pas 1.0) — question ouverte, pas creusée plus loin.
+
+  Exporte `lib/aav2_{F,J}_viab_potts_ridge_matrixfree_full.npy` (fit sur les 4 153 463 lignes
+  complètes, `lam=1.0`) — **candidat sérieux pour devenir un nouveau défaut de viabilité AAV2**
+  (meilleur `r` held-out de tous les fits AAV2 viab de ce fichier à ce jour), mais pas encore
+  promu comme tel — décision à prendre par l'utilisateur, comme pour toutes les décisions de GT
+  canonique précédentes de ce projet.
+
+- **2026-09-18 : nouvelle méthode de fit alternative — MLE multinomiale directe sur les comptages
+  bruts (Fernandez-de-Cossio-Diaz, Uguzzoni & Pagnani 2021, *MBE* 38(1):318-328,
+  doi:10.1093/molbev/msaa204), comparée empiriquement à notre ridge sur AAV2 viabilité.**
+  Suite à une question utilisateur ("est-ce que leur MLE peut mieux marcher que notre ridge
+  regression ?"), nouvelle fonction `RegressionV1.fit_weights_potts_mle_multinomial` (module V2
+  uniquement, message bumpé 1.5→1.6) : au lieu de calculer d'abord `y_s =
+  log2((N1_s+eps)/(N0_s+eps))` puis de faire une ridge pondérée sur ce ratio (notre méthode
+  actuelle), cette fonction écrit directement la vraisemblance multinomiale du papier
+  (approximation "rare binding", leurs éq. 1-3, restreinte au cas T=1 — un seul round, exactement
+  notre structure viabilité plasmide→virus, et exactement leur propre cas le plus favorable, le
+  jeu Olson et al.) et la maximise par L-BFGS (`scipy.optimize.minimize`, gradient via
+  `jax.grad`). Aucune matrice de design dense n'est jamais matérialisée (score calculé par
+  gather direct sur F/J, coût `O(N)`) — contrairement à `fit_weights_potts_unregularized`/
+  `fit_weights_potts`, plafonnées en pratique à ~90-150k lignes par la mémoire d'une matrice
+  dense `(N, 8541)`. Pas de terme de biais (non identifiable : une constante ajoutée à tous les
+  scores s'annule exactement dans la normalisation softmax). Pseudocount `eps=0.5` appliqué à
+  `N0` avant le log, conformément à la pratique du papier lui-même ("we add a pseudo-count of 1/2
+  to all counts ... before carrying out the inference") — confirmation que la convention `eps=0.5`
+  du projet est déjà alignée avec leur pratique.
+
+  Nouveau notebook `AAVs dataset/AAV2/viability/AAV2_potts_mle_multinomial.ipynb`
+  (**exécuté par Claude, dérogation ponctuelle explicite de l'utilisateur** à la convention
+  habituelle `feedback_user_runs_notebooks` — résultats réels, pas un smoke-test) sur
+  `AAV2_organoides.csv` (4 273 463 lignes, checkpoint viabilité `compte_plasmide`→`compte_virus`) :
+
+  1. **Comparaison à taille égale (n=90 000, le plafond mémoire de la ridge)** : la ridge
+     (`r held-out=+0.202`) bat nettement la MLE multinomiale (`r=+0.133`) — **contraire à
+     l'hypothèse initiale**. Explication proposée : le papier compare sa MLE à une "empirical
+     selectivity" (leur éq. 4) qui est un `h_s` LIBRE PAR SÉQUENCE, sans aucune structure Potts
+     partagée — alors que notre ridge fit déjà un F/J PARTAGÉ avec pondération inverse-variance,
+     donc capture déjà une bonne partie de l'avantage "mutualiser l'info entre séquences" que le
+     papier attribue à sa méthode.
+  2. **MLE à pleine échelle (n=4 153 463, tout le dataset moins le split test)** : `r=+0.205`,
+     rattrape tout juste la ridge à 90k lignes — et ~3x plus vite (~29s contre ~92s) malgré 46x
+     plus de données, grâce à l'absence de plafond mémoire. C'est là son vrai avantage pratique
+     pour ce projet, pas la qualité du fit à volume égal.
+     `r(F_ridge90k, F_mle_full)=+0.938` (bon accord additif) mais `r(J_ridge90k,
+     J_mle_full)=+0.296` (accord faible sur l'épistasie) — question ouverte, pas démêlée entre
+     effet d'échelle (90k vs 4.15M) et effet de méthode.
+  3. **Réplication de la décimation du papier (fig. 2a/b)**, sur la MÊME population fixe
+     (n=90 000, seuls les reads sont sous-échantillonnés via `Binomial(count,d)`) : le résultat
+     QUALITATIF se reproduit — la MLE dégrade environ 2x moins vite EN RELATIF que la ridge
+     quand la profondeur chute (coverage 31→0.62 reads/variant) : perte relative in-sample
+     -17% (MLE) vs -27% (ridge) ; held-out -22% (MLE) vs -40% (ridge). Mais un effet plus modeste
+     que la fig. 2 du papier (où leur "ratio naïf sans structure" s'effondre nettement plus que
+     n'importe quelle version structurée) — ici la ridge, déjà structurée, part d'un niveau plus
+     haut et le garde sur toute la plage testée ; la MLE est plus STABLE en relatif, pas
+     meilleure en absolu à ce volume de données.
+
+  **Conclusion retenue** : pas de remplacement de la ridge comme méthode par défaut du projet à
+  ce stade — mais un candidat solide si un futur usage a besoin d'exploiter la pleine échelle
+  d'un CSV brut (millions de lignes) ou un régime encore plus sous-échantillonné. Exporte
+  `lib/aav2_{F,J}_viab_potts_mle_multinomial_full.npy` (fit MLE 4.15M lignes) et
+  `lib/aav2_{F,J}_viab_potts_mle_ridge_baseline_90k.npy` (fit ridge 90k lignes, même split,
+  pour comparaison reproductible) — aucun des deux n'est destiné à remplacer
+  `aav2_F_viab_potts_plasmid50_vectorpos_cv.npy` (la GT canonique décidée le 2026-09-16, lignée
+  de données différente, `aav2.csv` basse-diversité). Résultats numériques bruts dans
+  `AAV2/viability/mle_multinomial_results/` (gitignoré comme les autres `.csv`/figures dérivées :
+  `baseline_results.json`, `decimation_sweep.csv`, `baseline_comparison.png`,
+  `decimation_sweep.png`).
+
+- **2026-09-16 (suite) : correction majeure — le cap `RATIO_MAX=100` (hérité de
+  `AAV2_viab_sorting.ipynb`) tronquait toute la queue haute du log2 enrichment réel, retiré de
+  `AAV2_SEL_potts_readout_depth.ipynb` et `AAV2_SEL_fitting_protocol_org2org3.ipynb` ; retrait
+  aussi du recentrage médiane dans ce dernier (valeurs brutes affichées).** Diagnostic déclenché
+  par l'utilisateur : `ratio≤100` équivaut par construction à `log2 enrichment ≤ log2(100)=6.644`
+  — vérifié sur `AAV2_organoides.csv` : ce cap rayait **100% des variants à `y>6.64`**, déjà 75%
+  de ceux à `y>6`, 46% à `y>5` — pas un filtre de bruit de comptage mais une amputation de la
+  queue haute (précisément les variants les plus enrichis). Le mur visible dans un histogramme
+  affiché par l'utilisateur (recentré médiane, coupure nette à "+2") a été diagnostiqué comme ce
+  même cap (`6.599 (max réel) − 4.458 (médiane de cette population) ≈ +2.14`), pas un bug
+  log10/log2 comme d'abord suspecté par l'utilisateur — colonne vérifiée `log2(virus/plasmide)`
+  à `r=1.0` près. Les deux notebooks ne gardent plus que `compte_plasmide ≥ 1` comme filtre
+  qualité (pas de cap sur le ratio). `AAV2_SEL_fitting_protocol_org2org3.ipynb` affiche
+  maintenant les histogrammes réel/simulé en **valeurs brutes, non recentrées** (sur demande
+  explicite) — le recentrage médiane n'affectait pas `r` (invariance par translation) mais
+  déplaçait la position visible du mur, rendant le diagnostic plus difficile.
+  **Conséquence en cascade, pas encore corrigée** : `aav2_F_viab_potts_sorted_cv.npy` (poids de
+  viabilité utilisés par `AAV2_SEL_fitting_protocol_org2org3.ipynb`) est lui-même fit sur
+  `AAV2_organoides_sorted.csv`, produit par `AAV2_viab_sorting.ipynb` avec l'ANCIEN cap
+  `ratio≤100` — ce notebook et les 6 autres notebooks viab qui en dépendent
+  (`AAV2_viab_fitting_protocol`, `AAV2_viab_profile_model`, `AAV2_viab_top10k_potts_protocol_mlp`,
+  `AAV2_viab_top50k_potts_protocol_mlp`, `AAV2_viab_noise_ceiling`,
+  `AAV2_viab_profile_model_denoising`) n'ont PAS été touchés — décision utilisateur en attente sur
+  s'il faut les corriger aussi. Toutes les sorties de cellules des deux notebooks corrigés ont été
+  effacées (résultats calculés sous l'ancien filtre, plus valides) — **`T_CHOSEN=5` (entrée
+  suivante) devra être reconfirmé** une fois la sweep rejouée sans le cap, la population changeant
+  substantiellement. Notebooks toujours jamais exécutés par Claude dans leur ensemble
+  (`feedback_user_runs_notebooks`).
+- **2026-09-16 (suite) : `T_CHOSEN=5` retenu pour la sélectivité AAV2 (pas 20), heatmap F/J §4
+  corrigée (bug d'édition IDE), et nouveau notebook `AAV2_SEL_fitting_protocol_org2org3.ipynb` —
+  simulation `ProtocolV3` complète (viab+sélectivité) avec ces poids.** (1) Dans
+  `AAV2_SEL_potts_readout_depth.ipynb`, `T_CHOSEN` passe de 20 à 5 : `r(F2,F3)` (accord des poids
+  entre réplicats) n'est pas monotone croissant en `T` sur AAV2 comme il l'était sur AAV5 — il
+  culmine à `T=0-5` (+0.645/+0.647) puis chute jusqu'à `T=30` (+0.185, `T=20` tombait dans ce
+  creux à +0.259) avant de remonter à `T=100` (+0.733, mais seulement 6-7k variants). Nouvel
+  export : `lib/aav2_{F,J}_sel_pool_potts_sorted_readoutT5_unreg.npy`. (2) Heatmap F/J de la
+  section 4 (grille `plt.subplots(7, 3, ...)`, éditée dans l'IDE par l'utilisateur) ne parcourait
+  que 2 des 7 lignes (boucle sur `[0, T_CHOSEN]` au lieu de `THRS`) — corrigé pour parcourir tous
+  les seuils. (3) Nouveau notebook `AAV2/selectivity/analysis of recovery/
+  AAV2_SEL_fitting_protocol_org2org3.ipynb` — port direct de `AAV5_SEL_fitting_protocol_org2org3.ipynb` :
+  `ProtocolV3` simulée sur 50 000 variants de la population org2∩org3 (construite en ligne, aucun
+  CSV pré-fait pour AAV2 contrairement à AAV5), poids sélectivité = le fit `T=5` ci-dessus, poids
+  viabilité = `aav2_F_viab_potts_sorted_cv.npy` (lignée organoïde, délibérément PAS la GT
+  canonique basse-diversité de `AAV2_potts_regression.ipynb` §12c — lignées de données
+  différentes), paramètres protocole "classiques" empruntés tels quels à AAV5 (aucun point de
+  fonctionnement combiné viab+sel propre à AAV2 n'existe encore). Détail complet dans les entrées
+  dédiées de "Structure du projet" ci-dessous. Logique des deux notebooks validée par smoke-test
+  sur données réelles — **aucun des deux notebooks exécuté par Claude dans son ensemble**
+  (`feedback_user_runs_notebooks`).
+- **2026-09-16 (suite) : nouveau dossier `Modelization_V2/notebooks/notebooks/AAVs dataset/AAV2/
+  selectivity/` — premier notebook de sélectivité AAV2, `AAV2_SEL_potts_readout_depth.ipynb`.**
+  Port direct de `AAV5/selectivity/sorting/AAV5_SEL_potts_readout_depth.ipynb` sur demande
+  explicite ("le filtre qu'on utilisera sera analogue au meilleur filtre trouvé avec aav5 donc il
+  faut une correspondance entre org2 et org3 et des filtres sur les minimums de count") — même
+  méthode de régression de Potts (F+J, 8541 features, `fit_weights_potts_from_data`, poids
+  inverse-variance `eps=0.5`), filtre = `compte_organoide_adn ≥ T` ET `compte_virus ≥ T` appliqué
+  à org2 ET org3 (correspondance entre réplicats + minimum de comptage combinés en un seul
+  critère), balayé sur `T ∈ {0,5,10,20,30,50,100}`, fit mutualisé org2+org3 à `T_CHOSEN=20` (repris
+  tel quel du choix AAV5, pas encore reconfirmé contre les résultats propres à AAV2). Différence
+  clé avec le port : `AAV2_organoides_sorted.csv` (viab) ne garde pas les colonnes organoïde, donc
+  ce notebook charge le CSV brut `AAV2_organoides.csv` et redérive en ligne le même filtre
+  qualité-viab que `AAV2_viab_sorting.ipynb` (`PLASMID_MIN=1`, `RATIO_MAX=100`) comme population
+  de base ; pas de retrait 7m8 (aucun spike-in plasmide trouvé pour AAV2). Exporte
+  `lib/aav2_{F,J}_sel_pool_potts_sorted_readoutT20_unreg.npy`. Détail complet dans l'entrée
+  `AAV2/selectivity/sorting/AAV2_SEL_potts_readout_depth.ipynb` de "Structure du projet"
+  ci-dessus. Logique validée par un smoke-test sur ~12% du CSV brut (pipeline complet exécuté sur
+  données réelles échantillonnées) — **notebook lui-même jamais exécuté par Claude dans son
+  ensemble** (`feedback_user_runs_notebooks`).
+- **2026-09-16 : `AAV2_potts_regression.ipynb` — histogramme de comptages, cache `.npy` pour
+  F_potts/J_potts, section 5 mise en veille, nouvelle section 12 (fit CV `plasmid_min∈{20,50}` ×
+  `vector>0`) + scatter, section 12b (`ProtocolV3` avec ces poids + réplicats), section 12c :
+  décision de GT canonique.**
+  1. **Section 1a** (nouvelle, juste après le chargement du CSV) : histogramme du nombre de
+     variants par valeur de comptage (`plasmid`/`vector`), bins log-espacés sur les valeurs >0
+     (jamais de KDE), fraction de `count==0` en légende — même convention que
+     `AAV5_SEL_analysis.ipynb` §1b.
+  2. **Section 3 mise en cache** : si `aav2_F_viab_potts.npy`/`aav2_J_viab_potts.npy` existent déjà
+     dans `lib/`, la cellule les charge directement au lieu de relancer le fit CV 5-fold complet à
+     chaque redémarrage du kernel (`FORCE_REFIT=False` par défaut) — `rank_full`/`info_full`
+     valent alors `None`, les cellules avales (courbe CV section 3, ligne `lambda` imprimée
+     section 9) gardées en conséquence.
+  3. **Section 5 mise entre guillemets** (`""" ... """`, sur demande explicite) : le refit
+     held-out 80/20 (un 2e fit CV complet, coûteux) est désactivé par défaut pour que `Run All`
+     ne le redéclenche pas — `r_potts`/`pred_potts_test` retombent à `None`, sections 6/9 gardées
+     en conséquence. Section 11 (sweep `plasmid_min`×`vector`, `lam=0`) volontairement PAS
+     touchée (l'utilisateur y itère encore).
+  4. **Nouvelle section 12** : 2 fits Potts avec sélection de λ par CV complète (pas `lam=0` comme
+     la section 11) sur `plasmid_min∈{20,50}` × `vector>0` — table `cv_filter_df`
+     (n_fit/rank/cv_lambda/r_sorted/r_brut), comparaison contre les fits `lam=0` de la section 11
+     si déjà exécutée, courbes CV, et scatter hexbin score-Potts-vs-`target`-réel (population
+     filtrée ET population brute).
+  5. **Section 12b** : `ProtocolV3` (viab seule) simulé avec CHACUN de ces 2 jeux de poids sur sa
+     propre population de fit (`plasmid>=pm & vector>0`) — histogrammes + scatter réel-vs-simulé
+     (réutilise `plot_histogram_grid`/`plot_scatter_grid` de la section 8c) ; 5 réplicats (seeds
+     différents) par seuil pour comparer la reproductibilité de `r(sim,réel)` au plafond
+     déterministe `r_sorted` de la section 12.
+  6. **Section 12c — décision utilisateur** : `plasmid_min=50, vector>0` (fit CV de la section 12)
+     devient LA GT canonique de viabilité AAV2 pour tout usage `ProtocolV3` en aval,
+     **remplaçant** le fit non filtré de la section 3/9 (`aav2_F_viab_potts.npy`, décision du
+     2026-09-15) comme défaut. Exporte `aav2_F_viab_potts_plasmid50_vectorpos_cv.npy`/
+     `aav2_J_viab_potts_plasmid50_vectorpos_cv.npy` (gitignorés, même convention que les autres
+     `.npy` du projet). Le fit non filtré reste en place pour comparaison, pas supprimé ; la
+     lignée organoïde IDV (`_sorted_cv`, `_top10k_cv`, HIGH DIVERSITY) n'est pas affectée par
+     cette décision. Section 9 amendée d'une note de supersession pointant vers la section 12c.
+  Toutes ces cellules validées par smoke-test sur données synthétiques (fit Potts réduit,
+  `ProtocolV3` réel sur un petit pool) — **notebook lui-même toujours jamais exécuté par Claude
+  dans son ensemble** (`feedback_user_runs_notebooks`).
+- **2026-09-15 (suite) : `AAV2_potts_regression.ipynb` — matrice de corrélation 5x5 (+ heatmap)
+  ajoutée pour les réplicats de la section 10, et nouvelle section 11 (finale) : sweep de
+  régression de Potts sur `plasmid_min` x détection `vector`.** (1) Complète la table de paires
+  déjà présente (section 10) par une vraie matrice 5x5 symétrique (`corr_df` + heatmap annotée),
+  sur demande explicite ("je voulais savoir la correlation les uns par rapport aux autres aussi").
+  (2) Section 11 : refit Potts (`lam=0`, pas de CV — même raison que les sweeps AAV5) sur 10
+  combinaisons (`plasmid_min` de `PLASMID_MIN_SWEEP` x `vector>0`/`vector>=0`), poids
+  inverse-variance `eps=0.5` recalculés sur chaque sous-ensemble filtré. Motivation du filtre
+  `vector>0` : distinguer "vraiment non-viable" de "erreur PCR/synthèse ayant fait dériver l'ADN
+  réel du variant désigné" (même phénomène que `new_variant_appearance_analysis.ipynb` sur AAV9),
+  `vector==0` ne permettant pas de trancher entre les deux. Chaque fit scoré 2 fois : `r` contre
+  sa PROPRE population filtrée ("triée") et `r` contre la population brute complète (53 382
+  séquences) — un filtre qui surapprend sur son sous-ensemble sans généraliser au brut se voit
+  dans l'écart entre les deux (déjà confirmé par le smoke-test : `r_sorted` sature à 1.000 dès que
+  `n_fit < 8541` features, rang déficient — interpolation parfaite, pas un signal réel — alors que
+  `r_brut` reste honnête). Logique smoke-testée (matrice sur données factices, sweep sur un
+  sous-échantillon de 8 000 lignes) — **notebook toujours jamais exécuté par Claude dans son
+  ensemble** (`feedback_user_runs_notebooks`).
+- **2026-09-15 (suite) : décision actée — `aav2_F_viab_potts.npy`/`aav2_J_viab_potts.npy`
+  (`AAV2_potts_regression.ipynb`, LOW DIVERSITY, `aav_viability_test/aav2.csv` 53 382 séquences)
+  deviennent LE modèle de viabilité par défaut pour tester `ProtocolV3` avec AAV2. Les 2 autres
+  variantes `aav2_*_potts_{sorted_cv,top10k_cv}.npy` (lignage IDV organoïde `AAV2_organoides*.csv`,
+  millions de séquences) sont explicitement étiquetées HIGH DIVERSITY — à n'utiliser QUE pour
+  comparer explicitement high-diversity vs low-diversity côté viabilité, jamais par défaut.**
+  Écrit noir sur blanc dans la section 9 (export) du notebook, sur demande explicite de
+  l'utilisateur. Nouvelle section 10 (finale) ajoutée dans la foulée : (1) plafond GT — r de
+  Pearson entre le score Potts déterministe (`score_FJ(seq_matrix, F_potts, J_potts)`, sans aucun
+  bruit protocole/NGS) et le `target` réel, jamais calculé ailleurs dans ce notebook (distinct de
+  `r_potts` section 5 — fit `idx_train` seul — et de `r_sim` section 8 — une seule simulation
+  bruitée) ; (2) 5 réplicats `ProtocolV3` (même `F_potts`/`J_potts`, même librairie complète non
+  filtrée 53 382 séquences, même config `D`/`mu`/`T_viab`/`noise_viab` que la section 8 — seed
+  différent à chaque fois), table des 10 corrélations de Pearson deux-à-deux entre réplicats +
+  histogramme superposé des 5 réplicats vs réel (recalé médiane), même style que la partie 1 d'
+  `AAV9_potts_GT_fitting_protocol.ipynb`. Logique smoke-testée sur un sous-échantillon de 4 000
+  lignes (r_gt_ceiling + 5 réplicats + 10 paires + histogramme) — **notebook toujours jamais
+  exécuté par Claude dans son ensemble** (`feedback_user_runs_notebooks`).
+- **2026-09-15 (suite) : `AAV2_potts_regression.ipynb` — grilles d'histogrammes 8c/8d passées en
+  échelle Y libre par panneau (au lieu de `sharey=True`) + grilles de scatter réel-vs-simulé
+  ajoutées, sur feedback utilisateur ("les courbes les mets pas a la meme echelle on voit plus
+  rien apres" puis "remets les scatter plot aussi").** `plot_histogram_grid` (`lib` notebook-local,
+  cf. entrée précédente) avait `sharey=True` : les populations filtrées vont de 53 382 à quelques
+  milliers de variants avec des étalements très différents, donc un axe Y partagé écrasait tous
+  les panneaux sauf celui au pic le plus haut — retiré, chaque panneau a maintenant sa propre
+  échelle. Nouveau helper `plot_scatter_grid` (même fichier, même convention `results_by_key`
+  keyed par seuil) : un hexbin réel-vs-simulé par seuil avec diagonale y=x, même style que les
+  scatters déjà présents en sections 8/8b — appelé juste après `plot_histogram_grid` pour 8c
+  (`sweep_results`) et 8d (`sweep_results_sym`), donc chaque sweep a maintenant sa paire
+  histogramme+scatter comme 8b. Logique smoke-testée (6 000 lignes, 3 seuils) — **notebook
+  toujours jamais exécuté par Claude dans son ensemble** (`feedback_user_runs_notebooks`).
+- **2026-09-15 (suite) : `AAV2_potts_regression.ipynb` — histogrammes du sweep 8c manquants
+  ajoutés + nouvelle section 8d (filtre symétrique `plasmid` ET `vector`), sur feedback
+  utilisateur ("tu n'as pas plot les histogrammes et test un autre filtre... vector").** Refactor
+  minimal pour éviter la duplication entre 8c et le nouveau 8d : extraction de deux helpers
+  (`run_filtered_protocol(mask)` — sous-échantillonne, calibre `D` sur les comptages réels
+  filtrés, lance un round `ProtocolV3`, retourne `d0`/`r_sim_real`/les tableaux bruts nécessaires
+  au tracé ; `plot_histogram_grid(results_by_key, ...)` — une grille de panneaux réel-vs-simulé,
+  un par seuil) insérés juste après le markdown de la section 8c, PAS de refactor de la section 8
+  elle-même (reste celle réglée à la main par l'utilisateur, `D=2e8` au moment de cette note).
+  8c (sweep `plasmid_min`, déjà exécuté avec succès par l'utilisateur — r(sim,réel) montait
+  +0.505→+0.547 de `plasmid_min=0` à `20`) réécrit pour utiliser le helper et stocker les tableaux
+  complets par seuil (pas seulement le résumé scalaire comme avant), plus une nouvelle cellule
+  grille d'histogrammes juste après le tableau/courbe existants. Nouvelle section 8d : sweep
+  IDENTIQUE mais avec le masque symétrique `(plasmid>=min) & (vector>=min)` au lieu de
+  `plasmid>=min` seul — table + courbe superposée sur le MÊME graphe que 8c (comparaison directe
+  seuil-à-seuil des deux stratégies de filtre) + sa propre grille d'histogrammes. Smoke-test sur
+  6 000 lignes : le filtre symétrique donne un `r` nettement meilleur que le filtre plasmide seul
+  au même seuil (~0.85-0.87 vs ~0.71-0.75 à `min=3-5` sur cet échantillon réduit — pas
+  nécessairement représentatif de la pleine échelle, à confirmer par l'utilisateur sur les
+  53 382 lignes). **Notebook toujours jamais exécuté par Claude dans son ensemble**
+  (`feedback_user_runs_notebooks`) — seul le smoke-test isolé (6 000 lignes, hors notebook) a
+  tourné côté Claude.
+- **2026-09-15 (suite) : `AAV2_potts_regression.ipynb` — sections 8b/8c ajoutées, filtre
+  `plasmid_min` sur le test `ProtocolV3` + sweep de seuil, toujours pendant que l'utilisateur
+  exécutait le notebook.** Sur demande explicite : (1) 8b répète le test `ProtocolV3` de la
+  section 8 mais retire d'abord les variants `plasmid < PLASMID_MIN` (défaut 3) — DE LA LIBRAIRIE
+  SIMULÉE ET DE LA POPULATION RÉELLE DE COMPARAISON, pour rester cohérent (histogramme/scatter de
+  la section 8 comparaient déjà le simulé au `target` réel, mais sur les 53 382 lignes complètes,
+  pas la population filtrée que la simulation représente désormais) ; `D` recalibré sur le ratio
+  reads/variant RÉEL de CETTE population filtrée (`D=(sum(plasmid)+sum(vector))/2` sur les lignes
+  filtrées, remplace le nombre magique codé en dur de la section 8 par un calcul dérivé des
+  données — reads/variant réel ~23→61 (plasmide) et ~30→79 (vecteur) en passant du dataset complet
+  à `plasmid>=3`). (2) 8c généralise en sweep sur `plasmid_min ∈ {0,3,5,10,20}` (0 = cas non
+  filtré, avec son propre `D` recalculé — PAS la valeur actuellement réglée à la main par
+  l'utilisateur en section 8, qui reste intouchée), une simulation `ProtocolV3` complète par
+  seuil, table + courbe de `r(simulé, réel)` en fonction du seuil. Section 8 elle-même (baseline
+  non filtré, `D=1.5e8` actuellement réglé par l'utilisateur) **non modifiée** — 8b/8c ajoutées à
+  la suite, pas en remplacement. Insertion chirurgicale via `NotebookEdit` (le notebook restait
+  ouvert/en cours d'exécution — CV de la section 5 toujours à 80% au moment de l'ajout, sections
+  8/8b/8c pas encore exécutées). Logique validée par un smoke-test sur un sous-échantillon de
+  6 000 lignes (fit Potts réduit + un run `ProtocolV3` filtré complet + un mini-sweep à 3 seuils)
+  — **notebook toujours jamais exécuté par Claude** (`feedback_user_runs_notebooks`).
+- **2026-09-15 (suite) : `AAV2_potts_regression.ipynb` — section "1b. Reads per step
+  (checkpoint)" ajoutée juste après le chargement du CSV (avant toute pondération/régression),
+  pendant que l'utilisateur exécutait déjà le notebook.** Table `total_reads`/`reads par variant`
+  (moyenne+médiane)/`n_variants>0`/`fraction>0` pour les 2 checkpoints du dataset (`plasmid` =
+  librairie initiale, `vector` = post-sélection viabilité — mêmes rôles que `lambda0p`/`lambda2p`
+  dans le framework `Protocol` de la section 8), plus `number_of_seq_threshold` (`lib/analysisV1.py`,
+  réutilisé tel quel) pour les seuils [1,10,100,1000]. Insertion chirurgicale via `NotebookEdit`
+  (PAS de réécriture complète du fichier comme pour les révisions précédentes) — le notebook étant
+  en cours d'exécution (CV de la section 5 à 80% au moment de la demande), reconstruire tout le
+  JSON aurait risqué d'écraser les sorties déjà calculées en cas de sauvegarde concurrente côté
+  utilisateur. Seul autre changement : `number_of_seq_threshold` ajouté à l'import `analysisV1` de
+  la cellule Setup (section 0) — pas d'autre cellule touchée. **Note en marge, non corrigée** :
+  l'utilisateur a modifié `D` dans la section 8 (`ProtocolV3` test) de `1.5e6` à `1.5e8` en cours
+  de route, mais le commentaire du code dit encore "~230-300 reads/variant" (qui correspondrait à
+  `D≈1.5e7`, ni à `1.5e6` ni à `1.5e8`) — valeur finale toujours en cours d'expérimentation par
+  l'utilisateur au moment de cette note, pas swept ni figée ici.
+- **2026-09-15 (suite) : `AAV2_potts_regression.ipynb` révisé sur feedback utilisateur — naïf
+  abandonné, split 80/20, analyse des poids F/J (heatmaps), test `ProtocolV3`.** Quatre
+  changements demandés explicitement : (1) baseline naïf group-means retiré entièrement (section
+  4 originale) — "on sait que le naive ne va pas on s'en fout" ; (2) split held-out 50/50 → 80/20
+  (`train_size=0.8`), plus de contrainte de symétrie avec un baseline à comparer ; (3) nouvelle
+  section 4 "F/J weight analysis" — `plot_teacher_weights` (`lib/analysisV1.py`, réutilisé tel
+  quel) pour F + mean(J), plus un panneau mean(|J|) (le mean(J) brut peut masquer la magnitude si
+  les signes s'annulent dans une cellule) et les 4 paires de positions les plus fortement couplées
+  en heatmap 20×20 individuelle — même diagnostic qu'`AAV9_potts_GT_score_study.ipynb` ; (4)
+  nouvelle section 8 "`ProtocolV3` test" — run viabilité seule (`F_sel=J_sel=0`) sur la librairie
+  réelle complète (53 382 séquences, pas de sous-échantillonnage), `lambda0` calibré sur le vrai
+  `plasmid` de chaque séquence, `D=1.5e6` calibré pour matcher le ratio reads/variant réel
+  (~23-30, `D/d0=28.1`) — même recette que `AAV5_viab_fitting_protocol.ipynb` (`rho=1e-3, mu=50,
+  T_viab=1.0, noise_viab=0.5, dilution_factor=1e5`, non recalibrés spécifiquement pour ce
+  dataset) ; histogramme recalé médiane (réel vs simulé superposés) + hexbin réel-vs-simulé,
+  Pearson r rapporté (invariant au recalage). **Grille lambda custom conservée sur demande
+  explicite** : `lambdas_grid=np.logspace(-2, 5, 20)` (0.01 à 100 000, au lieu du défaut de la
+  fonction `np.logspace(-1, 2, 30)`) — appliquée aux deux fits du notebook (section 3 full-data ET
+  section 5 held-out 80/20) pour rester comparables entre elles. Logique des nouvelles sections
+  validée par un smoke-test sur un sous-échantillon de 4 000 lignes (heatmaps, split 80/20, un
+  round `ProtocolV3` complet) — **notebook lui-même toujours jamais exécuté**
+  (`feedback_user_runs_notebooks`).
 - **2026-09-15 (suite) : nouveau notebook `AAV2_potts_regression.ipynb`, GT Potts pour AAV2 basée
   sur `Modelization_V1/notebooks/aav_viability_test/aav2.csv` (53 382 séquences, PAS le CSV
   organoïde IDV `AAV2_organoides.csv` déjà utilisé ailleurs dans `AAVs dataset/AAV2/`), demandé

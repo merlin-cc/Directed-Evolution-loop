@@ -43,7 +43,7 @@ from tqdm.auto import tqdm
 from sequence_classesV1 import *
 from analysisV1 import pearson, precision_at_k
 
-message = "file regression 1.5"
+message = "file regression 1.7"
 
 L = 7   # num_positions, matches Protocol.compute_score's hardcoded range(7)
 A = 20  # num_amino_acids
@@ -585,3 +585,376 @@ def evaluate_recovery(protocol, F_viab_hat, J_viab_hat, F_sel_hat, J_sel_hat):
         precision_at_1pct   = precision_at_k(combined_gt, combined_hat, k_frac=0.01),
         precision_at_10pct  = precision_at_k(combined_gt, combined_hat, k_frac=0.10),
     )
+
+
+### ---------------------- MLE multinomial fit (Fernandez-de-Cossio-Diaz et al.) -------- ###
+#######################################################################################
+
+def fit_weights_potts_mle_multinomial(seq_matrix, N0, N1, eps=0.5, lam=1.0, maxiter=300,
+                                       theta0=None, verbose=True):
+    """
+    Fits F/J by maximum likelihood directly on RAW before/after read counts, following the
+    "rare binding approximation" of Fernandez-de-Cossio-Diaz, Uguzzoni & Pagnani (2021,
+    Mol. Biol. Evol. 38(1):318-328, doi:10.1093/molbev/msaa204), eqs. (1)-(3), restricted to
+    the T=1 (single round, two sequenced time points) case -- exactly our AAV viability
+    checkpoint structure (plasmid t=0 -> virus t=1), and exactly their own minimal/highest-
+    coverage data set (Olson et al.: 1 selection round, 2 sequenced time points).
+
+    Contrast with fit_weights_potts_from_data: that method first collapses (N0, N1) into a
+    single noisy scalar target y(s) = log((N1+eps)/(N0+eps)) per sequence, then does weighted
+    least squares on y(s) -- i.e. it assumes a Gaussian residual around an already-lossy
+    summary statistic. This function instead writes the multinomial log-likelihood of
+    observing the ACTUAL round-to-round count vector N1 given N0 and the model, treating the
+    whole library as one competitive draw (every read at t=1 is "assigned" to sequences in
+    proportion to N0(s) * exp(score(s)), summed to 1 over the WHOLE population passed in).
+    This is the paper's central claim: fitting the counts directly (rather than a pointwise
+    ratio) extracts more signal per read and is far less sensitive to decimation/low coverage
+    (their fig. 2) -- exactly the regime AAV2's organoid CSV sits in (median compte_plasmide=1
+    for the whole dataset).
+
+    Model (rare-binding approximation, their eq. 3, T=1):
+        p(s) = N0(s) * exp(score(s)) / sum_r [ N0(r) * exp(score(r)) ]     (softmax over the
+                                                                             WHOLE population)
+        NLL(F,J) = -sum_s N1(s) * [ log(N0(s)+eps) + score(s) - logsumexp_r(log(N0(r)+eps) +
+                   score(r)) ]   +  lam * ||theta||^2
+
+    score(s) = F[s_pos, pos].sum() + sum_{i<j} J[i,j,s_i,s_j] -- exactly score_FJ's
+    convention elsewhere in this project (their fitness f(s) = -E(s), same sign).
+
+    No bias term (unlike fit_weights_potts/fit_weights_potts_unregularized): a constant added
+    to every sequence's score cancels exactly in the softmax normalization, so it is not
+    identifiable here and is simply omitted (n_params = L*A + n_pairs*A*A, not +1).
+
+    eps=0.5 pseudocount is applied to N0 (as the paper explicitly states: "we add a
+    pseudo-count of 1/2 to all counts ... before carrying out the inference") -- and to N1
+    only in the sense that N1=0 sequences still contribute their (zero) count validly to the
+    softmax denominator through N0; N1 itself needs no pseudocount since it only ever appears
+    as a multiplicative weight (N1(s)=0 simply drops that sequence's log-likelihood term).
+
+    IMPORTANT: `seq_matrix`/`N0`/`N1` define the population the softmax competes over. For a
+    held-out evaluation, fit on TRAIN sequences only (their N0/N1 restricted to that subset)
+    -- do not pass the full dataset if you intend to score TEST sequences separately with the
+    returned F/J (evaluation itself needs no logZ/softmax, since Pearson r is invariant to a
+    constant per-sequence shift -- just call score_FJ-style scoring on the held-out set).
+
+    Optimizer: L-BFGS-B via scipy.optimize.minimize (jac=True, gradient from jax.grad) --
+    matches the paper's own choice ("we found that the L-BFGS algorithm performed well").
+    The forward pass costs O(n_obs * n_pairs) (gather + sum, no dense design matrix ever
+    materialized), so a full AAV2 organoid-CSV fit (~millions of rows) is tractable per
+    iteration; wall-clock cost scales with maxiter.
+
+    Parameters
+    ----------
+    seq_matrix : (N, L) int array, amino-acid indices (build_potts_features convention).
+    N0         : (N,) raw "before" round read counts (e.g. compte_plasmide).
+    N1         : (N,) raw "after" round read counts (e.g. compte_virus).
+    eps        : pseudocount added to N0 before taking its log (paper's own convention,
+                 matches this project's eps=0.5 standard for self-computed log enrichments).
+    lam        : L2 penalty on the flat [F | J] parameter vector (no bias to exclude).
+    maxiter    : max L-BFGS-B iterations.
+    theta0     : optional (n_params,) warm start (e.g. from a prior fit at a nearby lam).
+                 None -> zeros (uniform p(s) proportional to N0(s) alone, sensible neutral start).
+
+    Returns
+    -------
+    F_hat, J_hat, info
+        info : dict with scipy's success/nit/fun (final NLL)/message, and n_obs.
+    """
+    seq_matrix = np.asarray(seq_matrix)
+    n_obs, Lseq = seq_matrix.shape
+    n_pairs = Lseq * (Lseq - 1) // 2
+    n_params = Lseq * A + n_pairs * A * A
+
+    logN0 = jnp.asarray(np.log(np.asarray(N0, dtype=np.float64) + eps))
+    N1j = jnp.asarray(np.asarray(N1, dtype=np.float64))
+    seq_j = jnp.asarray(seq_matrix)
+    pair_idx = [(i, j) for i in range(Lseq) for j in range(i + 1, Lseq)]
+
+    def unpack(theta):
+        F_flat = theta[:Lseq * A].reshape(Lseq, A)
+        F = F_flat.T  # (A, L)
+        J_flat = theta[Lseq * A:].reshape(n_pairs, A, A)
+        return F, J_flat
+
+    def score_fn(theta):
+        F, J_flat = unpack(theta)
+        s = F[seq_j, jnp.arange(Lseq)].sum(axis=1)
+        for k, (i, j) in enumerate(pair_idx):
+            s = s + J_flat[k][seq_j[:, i], seq_j[:, j]]
+        return s
+
+    def nll(theta):
+        score = score_fn(theta)
+        logits = logN0 + score
+        logZ = jax.scipy.special.logsumexp(logits)
+        ll = jnp.sum(N1j * (logits - logZ))
+        reg = lam * jnp.sum(theta ** 2)
+        return -ll + reg
+
+    value_and_grad = jax.jit(jax.value_and_grad(nll))
+
+    def scipy_obj(theta_np):
+        theta_j = jnp.asarray(theta_np, dtype=jnp.float64)
+        v, g = value_and_grad(theta_j)
+        return float(v), np.asarray(g, dtype=np.float64)
+
+    if theta0 is None:
+        theta0 = np.zeros(n_params, dtype=np.float64)
+
+    from scipy.optimize import minimize
+    res = minimize(scipy_obj, theta0, method="L-BFGS-B", jac=True,
+                    options=dict(maxiter=maxiter))
+
+    F_flat = res.x[:Lseq * A].reshape(Lseq, A)
+    F_hat = F_flat.T
+    J_flat = res.x[Lseq * A:].reshape(n_pairs, A, A)
+    J_hat = np.zeros((Lseq, Lseq, A, A))
+    for k, (i, j) in enumerate(pair_idx):
+        J_hat[i, j] = J_flat[k]
+        J_hat[j, i] = J_flat[k].T
+
+    info = dict(success=bool(res.success), nit=int(res.nit), fun=float(res.fun),
+                message=str(res.message), n_obs=n_obs, theta=res.x)
+    if verbose:
+        print(f"[MLE multinomial] converged={info['success']}  nit={info['nit']}  "
+              f"NLL={info['fun']:.4g}  n_obs={n_obs:,}")
+    return jnp.array(F_hat), jnp.array(J_hat), info
+
+
+### ---------------------- Matrix-free ridge (memory-scalable) -------------------- ###
+#######################################################################################
+
+def fit_weights_potts_ridge_matrixfree(seq_matrix, target, sample_weight=None, lam=1.0,
+                                        maxiter=1000, theta0=None, verbose=True):
+    """
+    Same ridge objective as fit_weights_potts/fit_weights_potts_unregularized --
+    0.5*sum(w*(Xtheta - y)^2) + 0.5*lam*||theta_no_bias||^2 -- solved WITHOUT ever
+    materializing the dense design matrix X (N, 8541).
+
+    Why: fit_weights_potts/fit_weights_potts_unregularized build X via build_potts_features
+    (a dense float32 array) and solve either the normal equations (np.linalg.solve on
+    X.T@X, ~O(N*p^2) to form) or lstsq (SVD). Both require X itself to exist in memory --
+    measured empirically (2026-09-18) at ~5x X's own size in peak RSS (14.6 GiB at
+    N=90,000, 40.1 GiB at N=250,000 -- consistent ratio), which caps N at roughly 700-750k
+    rows on a 121 GiB machine, and ~136 GiB just for X alone at N=4.27M (the full AAV2
+    organoid CSV) -- not tractable at all.
+
+    This function instead applies X (and implicitly X^T, via autodiff) as a linear
+    operator, exactly the same way fit_weights_potts_mle_multinomial avoids materializing
+    X for its multinomial likelihood: the forward pass is the SAME score_FJ-style
+    gather-based computation used everywhere else in this project (O(N) memory, no N x p
+    matrix), and jax.grad's reverse-mode autodiff through that gather IS the matrix-free
+    X^T @ r operation (a gather's adjoint is a scatter-add -- exactly what "sum the
+    residual over every row where this indicator feature is 1" means for X^T @ r, the
+    same bincount-based trick already used for the "surrogate Potts" fit in
+    AAV9_cross_packaging_parameter_sweeps.ipynb, just obtained here via autodiff instead
+    of hand-written bincounts). Solved by L-BFGS-B (scipy.optimize.minimize) -- for this
+    convex quadratic objective, L-BFGS converges to the same optimum as a direct solve,
+    just iteratively instead of via one matrix factorization.
+
+    Unlike fit_weights_potts_mle_multinomial, a bias term IS included and fit here (theta's
+    last entry, never penalized -- same convention as fit_weights_potts's
+    `reg[np.arange(n_feat-1), ...] += lam`, which also excludes the last/bias column):
+    the softmax normalization that makes bias unidentifiable in the multinomial model does
+    not apply to a plain weighted-least-squares objective. score_FJ elsewhere in this
+    project never adds this bias back in -- harmless for Pearson r (translation-invariant),
+    which is how every notebook in this project evaluates fit quality, but keep in mind if
+    ever comparing raw score VALUES against fit_weights_potts_unregularized's output (which
+    silently drops its own bias coefficient the same way, via _unpack_potts_weights only
+    reading the first L*A + n_pairs*A*A entries of its solved vector).
+
+    lam=0 (unregularized): L-BFGS started from theta0=zeros on a consistent linear system
+    tends toward the minimum-norm solution (the same property that makes CG's iterates on
+    singular systems converge to the minimum-norm least-squares solution when starting
+    from 0) -- expected to approximately match fit_weights_potts_unregularized's SVD-based
+    minimum-norm solution in the rank-deficient (p>n) regime, but this is an empirical
+    match to VERIFY, not a guarantee with the same numerical exactness as an SVD -- see
+    AAV2_potts_ridge_matrixfree_validation.ipynb for the actual comparison.
+
+    Parameters
+    ----------
+    seq_matrix    : (N, L) amino-acid indices (build_potts_features convention).
+    target        : (N,) real-valued regression target (log enrichment).
+    sample_weight : optional (N,) per-observation weights. None -> unweighted (all 1).
+    lam           : L2 penalty (same semantics/scale as fit_weights_potts's `lam`;
+                    lam=0 -> unregularized, matches fit_weights_potts_unregularized).
+    maxiter       : max L-BFGS-B iterations.
+    theta0        : optional (n_params,) warm start. None -> zeros.
+
+    Returns
+    -------
+    F_hat, J_hat, bias_hat, info
+        info : dict with scipy's success/nit/fun (final objective value)/message, n_obs.
+    """
+    seq_matrix = np.asarray(seq_matrix)
+    n_obs, Lseq = seq_matrix.shape
+    n_pairs = Lseq * (Lseq - 1) // 2
+    n_params = Lseq * A + n_pairs * A * A + 1  # +1 bias
+
+    y = jnp.asarray(np.asarray(target, dtype=np.float64))
+    if sample_weight is None:
+        w = jnp.ones(n_obs, dtype=jnp.float64)
+    else:
+        w = jnp.asarray(np.asarray(sample_weight, dtype=np.float64))
+    seq_j = jnp.asarray(seq_matrix)
+    pair_idx = [(i, j) for i in range(Lseq) for j in range(i + 1, Lseq)]
+
+    def unpack(theta):
+        F_flat = theta[:Lseq * A].reshape(Lseq, A)
+        F = F_flat.T  # (A, L)
+        J_flat = theta[Lseq * A: Lseq * A + n_pairs * A * A].reshape(n_pairs, A, A)
+        bias = theta[-1]
+        return F, J_flat, bias
+
+    def score_fn(theta):
+        F, J_flat, bias = unpack(theta)
+        s = F[seq_j, jnp.arange(Lseq)].sum(axis=1)
+        for k, (i, j) in enumerate(pair_idx):
+            s = s + J_flat[k][seq_j[:, i], seq_j[:, j]]
+        return s + bias
+
+    def loss(theta):
+        resid = score_fn(theta) - y
+        data_term = 0.5 * jnp.sum(w * resid ** 2)
+        reg_term = 0.5 * lam * jnp.sum(theta[:-1] ** 2)  # bias excluded, same as fit_weights_potts
+        return data_term + reg_term
+
+    value_and_grad = jax.jit(jax.value_and_grad(loss))
+
+    def scipy_obj(theta_np):
+        theta_j = jnp.asarray(theta_np, dtype=jnp.float64)
+        v, g = value_and_grad(theta_j)
+        return float(v), np.asarray(g, dtype=np.float64)
+
+    if theta0 is None:
+        theta0 = np.zeros(n_params, dtype=np.float64)
+
+    from scipy.optimize import minimize
+    res = minimize(scipy_obj, theta0, method="L-BFGS-B", jac=True, options=dict(maxiter=maxiter))
+
+    F_flat = res.x[:Lseq * A].reshape(Lseq, A)
+    F_hat = F_flat.T
+    J_flat = res.x[Lseq * A: Lseq * A + n_pairs * A * A].reshape(n_pairs, A, A)
+    J_hat = np.zeros((Lseq, Lseq, A, A))
+    for k, (i, j) in enumerate(pair_idx):
+        J_hat[i, j] = J_flat[k]
+        J_hat[j, i] = J_flat[k].T
+    bias_hat = float(res.x[-1])
+
+    info = dict(success=bool(res.success), nit=int(res.nit), fun=float(res.fun),
+                message=str(res.message), n_obs=n_obs)
+    if verbose:
+        print(f"[ridge matrix-free] converged={info['success']}  nit={info['nit']}  "
+              f"obj={info['fun']:.6g}  bias={bias_hat:.4g}  n_obs={n_obs:,}")
+    return jnp.array(F_hat), jnp.array(J_hat), bias_hat, info
+
+
+### -------------------- Shared scorer + matrix-free drop-in for fit_weights_potts_from_data ------ ###
+#######################################################################################
+
+def score_potts(seq_matrix, F, J, bias=0.0):
+    """
+    Deterministic Potts score s(seq) = F[seq_pos, pos].sum() + sum_{i<j} J[i,j,seq_i,seq_j]
+    (+ bias). Pure numpy, O(N*L^2), no design matrix -- the same computation every notebook in
+    this project has hand-rolled locally as a `score_FJ` helper; centralized here so new code
+    (starting with fit_weights_potts_from_data_matrixfree's CV loop below) can reuse it instead
+    of redefining it per notebook. Not used by the fitting functions themselves -- those need a
+    JAX-differentiable version, kept internal to fit_weights_potts_ridge_matrixfree/
+    fit_weights_potts_mle_multinomial.
+    """
+    F, J = np.asarray(F), np.asarray(J)
+    seq_matrix = np.asarray(seq_matrix)
+    Lseq = seq_matrix.shape[1]
+    s = F[seq_matrix, np.arange(Lseq)].sum(axis=1).astype(np.float64)
+    for i in range(Lseq):
+        for j in range(i + 1, Lseq):
+            s = s + J[i, j, seq_matrix[:, i], seq_matrix[:, j]]
+    return s + bias
+
+
+def fit_weights_potts_from_data_matrixfree(seq_matrix, target, sample_weight=None, lambdas_grid=None,
+                                            k_folds=5, seed=0, verbose=True, lam=None, maxiter=1000):
+    """
+    Drop-in matrix-free replacement for fit_weights_potts_from_data -- SAME call signature, SAME
+    return shape (F_hat, J_hat, rank, info with info["lam"]/info["cv_mse"]/info["lambdas_grid"]/
+    info["n_obs"]), so an existing call site switches by renaming the function alone.
+
+    **This is the recommended default for Potts regression fitting in this project going
+    forward (2026-09-18)** -- not a specialized/experimental variant. Validated to reproduce
+    fit_weights_potts/fit_weights_potts_unregularized's results essentially exactly on real AAV2
+    data (r(F)/r(J) > 0.999999, both regularized and unregularized -- see
+    AAV2_potts_ridge_matrixfree_validation.ipynb), while never materializing the dense (N, 8541)
+    design matrix that caps fit_weights_potts_unregularized/fit_weights_potts at roughly 700-750k
+    rows in practice (measured: ~5x the design matrix's own size in peak RSS -- 14.6 GiB at
+    N=90,000, 40.1 GiB at N=250,000, consistent ratio -- on a 121 GiB machine). On AAV2 organoid
+    data (4.27M rows), the old function cannot run on the full dataset at all (~136 GiB for the
+    design matrix alone); this one fits it in under 30s.
+
+    Unlike fit_weights_potts_from_data's CV loop (ridge_cv_mse_potts builds a dense X per fold --
+    itself memory-bound the same way as the final fit), K-fold CV here reuses the matrix-free
+    primitive (fit_weights_potts_ridge_matrixfree) for every fold's fit AND scores validation MSE
+    via score_potts (no matrix, ever) -- so CV-based fitting is matrix-free end to end, not just
+    a single fixed-lambda fit.
+
+    rank : always None (no SVD/lstsq step -- an iterative solver has no natural rank diagnostic,
+           see fit_weights_potts_ridge_matrixfree's docstring). Callers that print or branch on
+           `rank` should treat None as "not computed", not "full rank".
+
+    Parameters
+    ----------
+    Identical to fit_weights_potts_from_data: seq_matrix, target, sample_weight, lambdas_grid,
+    k_folds, seed, verbose, lam. Plus maxiter (L-BFGS-B iteration cap per fit, default 1000 --
+    fit_weights_potts_ridge_matrixfree converges in a few hundred iterations even at millions of
+    rows; raise it if a fit reports converged=False).
+
+    Returns
+    -------
+    F_hat, J_hat, rank, info -- rank is always None; info additionally carries info["bias"] (the
+    fitted bias term, not present in fit_weights_potts_from_data's info dict -- score_potts
+    ignores it by default like every score_FJ helper in this project does, since Pearson r is
+    translation-invariant; only relevant if ever comparing raw score VALUES, not correlations).
+    """
+    if lambdas_grid is None:
+        lambdas_grid = np.logspace(-1, 2, 30)
+        if verbose and lam is None:
+            print(f"lambdas_grid was not defined thus lambdas_grid = {lambdas_grid}")
+
+    seq_matrix = np.asarray(seq_matrix)
+    y = np.asarray(target, dtype=np.float64)
+    n_obs = seq_matrix.shape[0]
+    w = None if sample_weight is None else np.asarray(sample_weight, dtype=np.float64)
+
+    if lam is not None:
+        best_lam = float(lam)
+        if verbose:
+            tag = "minimum-norm unregularized" if best_lam == 0.0 else f"lam={best_lam:.4g} (fixed)"
+            print(f"{tag} -> matrix-free ridge fit, CV skipped")
+        F_hat, J_hat, bias_hat, _fit_info = fit_weights_potts_ridge_matrixfree(
+            seq_matrix, y, sample_weight=w, lam=best_lam, maxiter=maxiter, verbose=False)
+        info = dict(lam=best_lam, cv_mse=None, lambdas_grid=None, n_obs=n_obs, bias=bias_hat)
+        return F_hat, J_hat, None, info
+
+    kf = KFold(n_splits=k_folds, shuffle=True, random_state=seed)
+    cv_mse = np.zeros(len(lambdas_grid))
+    for tr, va in tqdm(list(kf.split(seq_matrix)), desc="Ridge CV (matrix-free)", leave=False):
+        w_tr = None if w is None else w[tr]
+        for k, lam_k in enumerate(lambdas_grid):
+            F_k, J_k, bias_k, _ = fit_weights_potts_ridge_matrixfree(
+                seq_matrix[tr], y[tr], sample_weight=w_tr, lam=float(lam_k),
+                maxiter=maxiter, verbose=False)
+            pred_va = score_potts(seq_matrix[va], F_k, J_k, bias=bias_k)
+            cv_mse[k] += np.mean((y[va] - pred_va) ** 2)
+    cv_mse /= kf.get_n_splits()
+    best_lam = float(lambdas_grid[np.argmin(cv_mse)])
+
+    if verbose:
+        print(f"Best lambda: {best_lam:.4f}")
+        if best_lam in (lambdas_grid[0], lambdas_grid[-1]):
+            edge = "lower" if best_lam == lambdas_grid[0] else "upper"
+            print(f"  WARNING: best lambda is at the {edge} grid boundary ({best_lam:.4g}) "
+                  f"-- the true optimum may lie outside lambdas_grid; widen it.")
+
+    F_hat, J_hat, bias_hat, _fit_info = fit_weights_potts_ridge_matrixfree(
+        seq_matrix, y, sample_weight=w, lam=best_lam, maxiter=maxiter, verbose=False)
+    info = dict(lam=best_lam, cv_mse=cv_mse, lambdas_grid=lambdas_grid, n_obs=n_obs, bias=bias_hat)
+    return F_hat, J_hat, None, info

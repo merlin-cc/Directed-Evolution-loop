@@ -112,6 +112,54 @@ all-zero design column (a cell with zero support) contributes zero to `XᵀX`'s 
 row/column, and the `+λI` term alone determines that coefficient, driving it to exactly 0 —
 no cell is guessed at from data that doesn't exist for it.
 
+### Update 2026-09-18: matrix-free solver is now the default fitting method
+
+The fitting procedure above (`build_potts_features` → dense `X` → `ridge_cv_mse_potts`/
+`fit_weights_potts`/`fit_weights_potts_unregularized`, all via `RegressionV1.fit_weights_potts_from_data`)
+still works and is unchanged — but it is no longer the recommended entry point for **new** Potts
+regression fitting. Measured empirically (2026-09-18): materializing the dense design matrix `X`
+(`N × 8,541`, float32) and solving via SVD (`lstsq`) or `np.linalg.solve` on `XᵀX` costs roughly
+**5× `X`'s own size in peak RSS** (14.6 GiB at `N=90,000`, 40.1 GiB at `N=250,000` — a consistent
+ratio, not just `X` itself sitting in memory), capping practical `N` at ~700-750k rows on a 121 GiB
+machine, and requiring ~136 GiB for `X` alone at the scale of AAV2's organoid CSV (4.27M rows) —
+not tractable at all.
+
+`RegressionV1.fit_weights_potts_from_data_matrixfree` is a **drop-in replacement** — identical call
+signature and return shape (`F_hat, J_hat, rank, info`) — that solves the exact same ridge objective
+(`0.5·Σw(Xθ−y)² + 0.5·λ‖θ_no-bias‖²`) without ever materializing `X`: the forward pass is the same
+gather-based computation every notebook in this project already hand-rolls as a local `score_FJ`
+helper (now centralized as `RegressionV1.score_potts`), and the gradient (`jax.grad`, reverse-mode
+autodiff through that gather) *is* the matrix-free `XᵀX`/`Xᵀy` operation — the same principle as the
+"surrogate Potts" fit in `AAV9_cross_packaging_parameter_sweeps.ipynb` (which computes `Xᵀy` via
+`np.bincount` instead), just obtained here via autodiff rather than hand-written bincounts. Solved
+by L-BFGS-B (`scipy.optimize.minimize`) — a convex quadratic, so it converges to the *same* optimum
+as the direct solve, just iteratively. K-fold CV (`lam=None`) is matrix-free end to end too: every
+fold's fit *and* its validation-MSE scoring go through the same gather-based path, unlike
+`ridge_cv_mse_potts`, which still builds a dense `X` per fold.
+
+**Validated, not just asserted**: `AAVs dataset/AAV2/viability/AAV2_potts_ridge_matrixfree_validation.ipynb`
+fits the same AAV2 data both ways (`N=90,000`, the old method's practical ceiling) and compares —
+`r(F_classic, F_matrixfree)` / `r(J_classic, J_matrixfree)` **> 0.999999** in both the regularized
+and unregularized (rank-deficient, minimum-norm) cases, held-out `r` identical to the 4th decimal.
+The matrix-free solver was also **24-65× faster** at that same `N` (1.4-1.5s vs 36.5-91.0s) — a
+side benefit, not the point. At the full AAV2 organoid scale (`N=4,153,463`), it fits in ~26s and
+reaches `r=+0.302` held-out — the best AAV2 viability result obtained in this project to date,
+beating both the memory-capped classic fit (`r=+0.202` at `N=90,000`) and a from-scratch
+multinomial-MLE alternative explored the same day (`AAV2_potts_mle_multinomial.ipynb`, based on
+Fernandez-de-Cossio-Diaz, Uguzzoni & Pagnani, *MBE* 2021,
+[10.1093/molbev/msaa204](https://doi.org/10.1093/molbev/msaa204) — see that notebook's own
+write-up for why it doesn't beat a properly-scaled ridge fit here, despite being the more
+"principled" likelihood for count data on paper).
+
+Consequently, every AAV2 notebook whose job is to *fit* F/J via Potts regression (as opposed to
+consuming already-exported `.npy` weights downstream) was rebuilt to call
+`fit_weights_potts_from_data_matrixfree` instead of `fit_weights_potts_from_data` — mechanically,
+since the two share a signature. The pre-rebuild versions (still using the dense/SVD path) are kept
+for reference in `AAVs dataset/AAV2/obsolete_dense_matrix_potts_regression/`. See the top-level
+`CLAUDE.md`'s "État actuel" (2026-09-18 entries) for the full list and per-notebook detail. AAV5/AAV9
+notebooks are unaffected — this project convention doesn't retroactively migrate work outside AAV2
+unless/until asked.
+
 ### Tried and rejected: a Poisson-GLM fit
 
 Ridge least squares on `log(target)` **is** a maximum-likelihood fit — of a linear model with
